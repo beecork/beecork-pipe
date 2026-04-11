@@ -2,6 +2,24 @@
 
 All notable changes to Beecork are documented here.
 
+## [1.4.1] — 2026-04-11
+
+### Changed
+- **Node.js runtime bumped to 24 (Active LTS).** CI and publish workflows now run on Node 24 (from Node 20, which hit EOL in April 2026). `package.json` `engines.node` is now `>=22` (Maintenance LTS floor).
+- **GitHub Actions bumped to `@v6`.** `actions/checkout@v4` → `@v6`, `actions/setup-node@v4` → `@v6`. Fixes the deprecation warning about Node 20 runners being removed in September 2026.
+- **TypeScript 5.7 → 6.0** (major). Clean build, no source changes required.
+- **vitest 3.0 → 4.1** (major). One test fix in `tests/unit/pipeline.test.ts` (arrow → regular function in `ProgressTracker` mock, required because vitest 4 strictly enforces that constructor mocks must be newable).
+- **commander 13 → 14** (major). No source changes required.
+- **uuid 11 → 13** (two majors). No source changes required; the stable `import { v4 as uuidv4 } from 'uuid'` form we use is unchanged. Also dropped `@types/uuid` since uuid now ships its own types.
+- Minor/patch bumps across: `@modelcontextprotocol/sdk` 1.28 → 1.29, `discord.js` 14.25 → 14.26, `node-cron` 4.0 → 4.2, `tsx` 4.0 → 4.21, `eslint` 10.1 → 10.2, `typescript-eslint` 8.58.0 → 8.58.1, `@types/better-sqlite3`, `@types/node-cron`, `@types/node-telegram-bot-api`.
+- `@types/node` 22 → 24 (aligning with Node 24 LTS).
+
+### Added
+- **Dependabot configuration** (`.github/dependabot.yml`). Weekly grouped patch/minor PRs for both npm and GitHub Actions ecosystems — keeps Beecork current without manual review overhead. Major bumps are skipped and need deliberate action.
+
+### Internal
+- 214/214 unit tests pass.
+
 ## [1.4.0] — 2026-04-11
 
 ### Changed

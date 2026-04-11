@@ -18,12 +18,14 @@ vi.mock('../../src/util/logger.js', () => ({
   logger: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
 }));
 
-// Mock ProgressTracker
+// Mock ProgressTracker — use a regular function so `new ProgressTracker()` works under vitest 4
 vi.mock('../../src/util/progress.js', () => ({
-  ProgressTracker: vi.fn().mockImplementation(() => ({
-    record: vi.fn(),
-    stop: vi.fn(),
-  })),
+  ProgressTracker: vi.fn().mockImplementation(function () {
+    return {
+      record: vi.fn(),
+      stop: vi.fn(),
+    };
+  }),
 }));
 
 function makeTabManager(overrides: Partial<TabManager['sendMessage']> = {}): TabManager {

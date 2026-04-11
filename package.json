@@ -7,7 +7,7 @@
     "beecork": "dist/index.js"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
@@ -19,28 +19,27 @@
     "prepublishOnly": "npm test && npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.28.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@whiskeysockets/baileys": "^6.7.0",
     "better-sqlite3": "^12.8.0",
-    "commander": "^13.0.0",
-    "discord.js": "^14.25.1",
-    "node-cron": "^4.0.0",
+    "commander": "^14.0.3",
+    "discord.js": "^14.26.2",
+    "node-cron": "^4.2.1",
     "node-telegram-bot-api": "^0.67.0",
-    "uuid": "^11.0.0"
+    "uuid": "^13.0.0"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.2.2",
-    "@types/better-sqlite3": "^7.6.0",
-    "@types/node": "^22.0.0",
-    "@types/node-cron": "^3.0.0",
-    "@types/node-telegram-bot-api": "^0.64.0",
-    "@types/uuid": "^10.0.0",
-    "eslint": "^10.1.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/node-cron": "^3.0.11",
+    "@types/node-telegram-bot-api": "^0.64.14",
+    "eslint": "^10.2.0",
     "tailwindcss": "^4.2.2",
-    "tsx": "^4.0.0",
-    "typescript": "^5.7.0",
-    "typescript-eslint": "^8.58.0",
-    "vitest": "^3.0.0"
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "typescript-eslint": "^8.58.1",
+    "vitest": "^4.1.4"
   },
   "files": [
     "dist/"
