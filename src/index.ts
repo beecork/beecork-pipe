@@ -380,7 +380,6 @@ program
       console.log(`  ${name}:`);
       if (tmpl.workingDir) console.log(`    workingDir: ${tmpl.workingDir}`);
       if (tmpl.systemPrompt) console.log(`    systemPrompt: "${tmpl.systemPrompt.slice(0, 80)}${tmpl.systemPrompt.length > 80 ? '...' : ''}"`);
-      if (tmpl.approvalMode) console.log(`    approvalMode: ${tmpl.approvalMode}`);
     }
     console.log('');
   });
@@ -458,28 +457,6 @@ program
     const h = parseInt(hours || '24');
     const { getActivitySummary, formatActivitySummary } = await import('./observability/analytics.js');
     console.log(formatActivitySummary(getActivitySummary(h)));
-  });
-
-program
-  .command('machines')
-  .description('List registered machines')
-  .action(async () => {
-    const { listMachines } = await import('./machines/index.js');
-    const machines = listMachines();
-    if (machines.length === 0) {
-      console.log('No machines registered. Start the daemon to register this machine.');
-      return;
-    }
-    console.log(`\n${machines.length} machine(s):\n`);
-    for (const m of machines) {
-      const primary = m.isPrimary ? ' (primary)' : '';
-      const remote = m.host ? ` — ${m.sshUser}@${m.host}` : ' — local';
-      console.log(`  ${m.name}${primary}${remote}`);
-      for (const p of m.projectPaths) {
-        console.log(`    ${p}`);
-      }
-    }
-    console.log('');
   });
 
 program

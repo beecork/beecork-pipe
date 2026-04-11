@@ -134,24 +134,13 @@ export async function setupWizard(): Promise<void> {
       tabs: {
         default: {
           workingDir: defaultDir,
-          approvalMode: 'yolo',
-          approvalTimeoutMinutes: 30,
         },
       },
       memory: {
-        enabled: true,
         dbPath: '~/.beecork/memory.db',
         maxLongTermEntries: 1000,
       },
-      pipe: {
-        enabled: false,
-        anthropicApiKey: '',
-        routingModel: 'claude-haiku-4-5-20251001',
-        complexModel: 'claude-sonnet-4-6-20250514',
-        confidenceThreshold: 0.75,
-        projectScanPaths: scanPaths,
-        maxFollowUps: 5,
-      },
+      projectScanPaths: scanPaths,
       deployment: 'local',
     };
 
@@ -170,17 +159,10 @@ export async function setupWizard(): Promise<void> {
     generateMcpConfig();
     console.log(`✓ MCP config generated at ${getMcpConfigPath()}`);
 
-    // Inject Beecork instructions into global CLAUDE.md
-    injectClaudeMd();
-    console.log('✓ Beecork tools injected into ~/.claude/CLAUDE.md');
-
-    // Scan for projects if pipe is enabled
-    if (config.pipe.enabled) {
-      const { scanForProjects } = await import('../pipe/project-scanner.js');
-      const { PipeMemoryStore } = await import('../pipe/memory-store.js');
-      const projects = scanForProjects(config.pipe.projectScanPaths);
-      const store = new PipeMemoryStore();
-      for (const p of projects) { store.upsertProject(p); }
+    // Discover projects on disk
+    {
+      const { discoverProjects } = await import('../projects/index.js');
+      const projects = discoverProjects(config.projectScanPaths);
       console.log(`✓ Discovered ${projects.length} projects`);
       closeDb();
     }
@@ -220,11 +202,6 @@ export async function setupWizard(): Promise<void> {
     console.log('    beecork quickstart — full getting-started checklist');
     console.log('');
 
-    console.log('  ★ Recommended: Smart folder routing');
-    console.log('    If you work in multiple folders, Beecork can auto-detect which');
-    console.log('    folder you mean and route messages to the right tab.');
-    console.log('    Run: beecork pipe setup');
-    console.log('');
     console.log('  Add more channels:');
     console.log('    beecork whatsapp           — connect WhatsApp');
     console.log('    beecork discord            — connect Discord');
@@ -284,61 +261,3 @@ function generateMcpConfig(): void {
   fs.writeFileSync(getMcpConfigPath(), JSON.stringify(mcpConfig, null, 2) + '\n');
 }
 
-const BEECORK_MARKER_START = '<!-- BEECORK START -->';
-const BEECORK_MARKER_END = '<!-- BEECORK END -->';
-
-const BEECORK_CLAUDE_MD = `${BEECORK_MARKER_START}
-## Beecork — Always-On Tools
-
-You have Beecork MCP tools available when running inside Beecork:
-
-**Memory:** beecork_remember, beecork_recall — store and search long-term memory
-**Scheduling:** beecork_task_create/list/delete — schedule recurring tasks (aliases: beecork_cron_*)
-**Watchers:** beecork_watch_create/list/delete — monitor conditions and auto-respond
-**Tabs:** beecork_tab_create/list, beecork_send_message — manage virtual tabs
-**Communication:** beecork_notify, beecork_send_media — notify user, send files
-**Delegation:** beecork_delegate, beecork_delegation_status — delegate tasks to other tabs
-**Media:** beecork_generate_image/video/audio — generate media via AI providers
-**Projects:** beecork_project_create/list — manage projects
-**Observability:** beecork_cost, beecork_activity, beecork_status — track spending and activity
-**Handoff:** beecork_handoff — export session for terminal resume
-
-### Self-Extension
-
-You can install new capabilities for yourself. If the user asks for a tool or media provider that isn't configured:
-
-1. Check if a community package exists: \`beecork-media-<name>\` or \`beecork-channel-<name>\` on npm
-2. Install it: \`npm install -g beecork-media-<name>\`
-3. Or create a custom MCP server: write a Node.js script wrapping the API, register in \`~/.beecork/mcp-config.json\`
-4. Tell the user to restart: \`beecork stop && beecork start\`
-
-### Guidelines
-
-- Always call beecork_recall at the start of complex tasks
-- Always beecork_remember important outcomes and decisions
-- Use beecork_notify for progress on long tasks
-- Use beecork_delegate for independent subtasks that need their own workspace
-${BEECORK_MARKER_END}`;
-
-function injectClaudeMd(): void {
-  const claudeMdPath = path.join(os.homedir(), '.claude', 'CLAUDE.md');
-  const claudeDir = path.dirname(claudeMdPath);
-  fs.mkdirSync(claudeDir, { recursive: true });
-
-  let content = '';
-  if (fs.existsSync(claudeMdPath)) {
-    content = fs.readFileSync(claudeMdPath, 'utf-8');
-
-    // Remove old injection if present
-    const startIdx = content.indexOf(BEECORK_MARKER_START);
-    const endIdx = content.indexOf(BEECORK_MARKER_END);
-    if (startIdx !== -1 && endIdx !== -1) {
-      content = content.slice(0, startIdx) + content.slice(endIdx + BEECORK_MARKER_END.length);
-      content = content.trim();
-    }
-  }
-
-  // Append Beecork section
-  content = content + '\n\n' + BEECORK_CLAUDE_MD + '\n';
-  fs.writeFileSync(claudeMdPath, content);
-}

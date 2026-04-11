@@ -3,8 +3,15 @@ import type { BeecorkConfig, StreamContentToolUse, StreamUsage } from '../../src
 export const mockConfig: BeecorkConfig = {
   telegram: { token: 'test-token', allowedUserIds: [123] },
   claudeCode: { bin: 'claude', defaultFlags: [] },
-  tabs: { default: { workingDir: '/tmp', approvalMode: 'yolo', approvalTimeoutMinutes: 30, debounceMs: 1500 } },
-  memory: { enabled: true, dbPath: '/tmp/test.db', maxLongTermEntries: 1000 },
+  tabs: { default: { workingDir: '/tmp' } },
+  memory: { dbPath: '/tmp/test.db', maxLongTermEntries: 1000 },
+  pipe: {
+    enabled: false,
+    anthropicApiKey: '',
+    routingModel: 'claude-haiku-4-5-20251001',
+    confidenceThreshold: 0.75,
+    projectScanPaths: [],
+  },
   deployment: 'local',
 };
 

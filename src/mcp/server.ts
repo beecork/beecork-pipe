@@ -345,11 +345,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
-      name: 'beecork_machines',
-      description: 'List registered machines and their folder paths. Shows which machine handles which folders.',
-      inputSchema: { type: 'object' as const, properties: {} },
-    },
-    {
       name: 'beecork_delegate',
       description: 'Delegate a task to another tab. The target tab runs independently and the result is automatically sent back to the source tab when complete. Use this for tasks that need their own working directory or context.',
       inputSchema: {
@@ -518,6 +513,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
         // Default: existing tab memory behavior
         const fullContent = category ? `[${category}] ${content}` : content;
+        // Dedup: skip insert if an identical fact already exists
+        const existing = db.prepare(
+          'SELECT id FROM memories WHERE content = ? AND tab_name IS NULL LIMIT 1'
+        ).get(fullContent) as { id: number } | undefined;
+        if (existing) {
+          return ok(`Already remembered: "${fullContent}"`);
+        }
         db.prepare('INSERT INTO memories (content, source) VALUES (?, ?)').run(fullContent, 'tool');
         return ok(`Remembered: "${fullContent}"`);
       }
@@ -825,12 +827,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           recentMessages: messages.reverse().map((m: any) => ({ role: m.role, preview: m.content.slice(0, 200) })),
         };
         return ok(JSON.stringify(info, null, 2));
-      }
-
-      case 'beecork_machines': {
-        const { listMachines } = await import('../machines/index.js');
-        const machines = listMachines();
-        return ok(JSON.stringify(machines, null, 2));
       }
 
       case 'beecork_delegate': {

@@ -6,35 +6,20 @@ import type { BeecorkConfig, TabConfig } from './types.js';
 
 const DEFAULT_TAB_CONFIG: TabConfig = {
   workingDir: os.homedir(),
-  approvalMode: 'yolo',
-  approvalTimeoutMinutes: 30,
 };
 
-const DEFAULT_PIPE_CONFIG: BeecorkConfig['pipe'] = {
-  enabled: false,
-  anthropicApiKey: '',
-  routingModel: 'claude-haiku-4-5-20251001',
-  complexModel: 'claude-sonnet-4-6-20250514',
-  confidenceThreshold: 0.75,
-  projectScanPaths: ['~/Coding', '~/Projects', '~/code', '~/dev'],
-  maxFollowUps: 5,
-};
+const DEFAULT_PROJECT_SCAN_PATHS = ['~/Coding', '~/Projects', '~/code', '~/dev'];
 
 /**
- * INTENTIONAL: Beecork is designed for unattended AI agent operation.
- * 'yolo' mode allows all tool calls without user approval.
- * Users can override to 'auto-safe' or 'manual' in ~/.beecork/config.json.
+ * INTENTIONAL: --dangerously-skip-permissions is required for unattended operation.
+ * Without it, Claude Code would block on every tool call waiting for user input.
+ * Users can override defaultFlags in ~/.beecork/config.json.
  */
 const DEFAULT_CONFIG: BeecorkConfig = {
   telegram: {
     token: '',
     allowedUserIds: [],
   },
-  /**
-   * INTENTIONAL: --dangerously-skip-permissions is required for unattended operation.
-   * Without it, Claude Code would block on every tool call waiting for user input.
-   * Users can override defaultFlags in ~/.beecork/config.json.
-   */
   claudeCode: {
     bin: 'claude',
     defaultFlags: ['--dangerously-skip-permissions'],
@@ -43,11 +28,10 @@ const DEFAULT_CONFIG: BeecorkConfig = {
     default: { ...DEFAULT_TAB_CONFIG },
   },
   memory: {
-    enabled: true,
     dbPath: '~/.beecork/memory.db',
     maxLongTermEntries: 1000,
   },
-  pipe: { ...DEFAULT_PIPE_CONFIG },
+  projectScanPaths: [...DEFAULT_PROJECT_SCAN_PATHS],
   deployment: 'local',
 };
 
@@ -128,10 +112,10 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
       ...DEFAULT_CONFIG.memory,
       ...raw.memory,
     },
-    pipe: {
-      ...DEFAULT_PIPE_CONFIG,
-      ...raw.pipe,
-    },
+    // Fall back to legacy pipe.projectScanPaths so old configs keep working
+    projectScanPaths: raw.projectScanPaths
+      ?? (raw as { pipe?: { projectScanPaths?: string[] } }).pipe?.projectScanPaths
+      ?? [...DEFAULT_PROJECT_SCAN_PATHS],
     deployment: raw.deployment ?? DEFAULT_CONFIG.deployment,
     // Preserve optional config sections (no defaults needed)
     whatsapp: raw.whatsapp,

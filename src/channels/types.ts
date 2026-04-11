@@ -1,5 +1,4 @@
 import type { TabManager } from '../session/manager.js';
-import type { PipeBrain } from '../pipe/brain.js';
 import type { BeecorkConfig } from '../types.js';
 
 /** A media file attached to a message */
@@ -69,7 +68,6 @@ export interface Channel {
 export interface ChannelContext {
   config: BeecorkConfig;
   tabManager: TabManager;
-  pipeBrain: PipeBrain | null;
   /** Broadcast notification to all channels + notification providers */
   notifyCallback?: (message: string) => Promise<void>;
 }

@@ -187,9 +187,6 @@ export class TaskScheduler {
           await this.onNotify('Beecork health check: all systems operational');
         }
         break;
-      case 'memory_compaction':
-        logger.info('System event: memory compaction (not yet implemented)');
-        break;
       default:
         logger.warn(`Unknown system event: ${job.message}`);
     }

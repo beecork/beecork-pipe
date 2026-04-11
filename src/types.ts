@@ -14,25 +14,17 @@ export interface ClaudeCodeConfig {
 }
 
 export interface MemoryConfig {
-  enabled: boolean;
   dbPath: string;
   maxLongTermEntries: number;
 }
 
 export interface TabConfig {
   workingDir: string;
-  /** Reserved for future use. Currently has no effect — all sessions run in 'yolo' mode. */
-  approvalMode: ApprovalMode;
-  /** Reserved for future use. Currently has no effect. */
-  approvalTimeoutMinutes: number;
 }
-
-export type ApprovalMode = 'yolo' | 'ask' | 'auto-safe';
 
 export interface TabTemplate {
   workingDir?: string;
   systemPrompt?: string;
-  approvalMode?: ApprovalMode;
 }
 
 export interface WhatsAppConfig {
@@ -42,15 +34,6 @@ export interface WhatsAppConfig {
   allowedNumbers: string[];
 }
 
-export interface PipeConfig {
-  enabled: boolean;
-  anthropicApiKey: string;
-  routingModel: string;
-  complexModel: string;
-  confidenceThreshold: number;
-  projectScanPaths: string[];
-  maxFollowUps: number;
-}
 
 export interface VoiceConfig {
   sttProvider: 'whisper-api' | 'none';
@@ -109,7 +92,8 @@ export interface BeecorkConfig {
   tabs: Record<string, TabConfig>;
   tabTemplates?: Record<string, TabTemplate>;
   memory: MemoryConfig;
-  pipe: PipeConfig;
+  /** Directories to scan for projects on startup (defaults to ~/Coding, ~/Projects, etc.) */
+  projectScanPaths: string[];
   voice?: VoiceConfig;
   groups?: GroupConfig;
   notifications?: NotificationConfig[];

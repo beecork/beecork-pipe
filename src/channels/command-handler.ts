@@ -177,20 +177,6 @@ export async function handleSharedCommand(
     return { handled: true, response: formatHandoffInfo(info) };
   }
 
-  // /machines
-  if (text === '/machines' || text.startsWith('/machines@')) {
-    const { listMachines } = await import('../machines/index.js');
-    const machines = listMachines();
-    if (machines.length === 0) return { handled: true, response: 'No machines registered.' };
-    const list = machines.map(m => {
-      const primary = m.isPrimary ? ' ⭐' : '';
-      const remote = m.host ? ` (${m.sshUser}@${m.host})` : ' (local)';
-      const paths = m.projectPaths.slice(0, 3).join(', ');
-      return `• ${m.name}${primary}${remote}\n  Projects: ${paths}`;
-    }).join('\n\n');
-    return { handled: true, response: `🖥 ${machines.length} machine(s):\n\n${list}` };
-  }
-
   // /folders (also accept legacy /projects)
   if (text === '/folders' || text === '/projects' || text.startsWith('/folders@') || text.startsWith('/projects@')) {
     const { listProjects } = await import('../projects/index.js');

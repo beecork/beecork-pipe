@@ -150,17 +150,8 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 12,
-    description: 'Add machines table for multi-machine routing',
-    up: `CREATE TABLE IF NOT EXISTS machines (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      host TEXT,
-      ssh_user TEXT,
-      project_paths TEXT,
-      is_primary INTEGER DEFAULT 0,
-      last_seen_at TEXT DEFAULT (datetime('now')),
-      created_at TEXT DEFAULT (datetime('now'))
-    )`,
+    description: 'Removed machines table (retired multi-machine scaffolding)',
+    up: '',
   },
   {
     version: 13,
@@ -246,6 +237,14 @@ const MIGRATIONS: Migration[] = [
     version: 21,
     description: 'Add index on activity_log.created_at',
     up: 'CREATE INDEX IF NOT EXISTS idx_activity_log_created ON activity_log(created_at)',
+  },
+  {
+    version: 22,
+    description: 'Add indices on memories for dedup lookups and tab-scoped reads',
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_memories_content ON memories(content);
+      CREATE INDEX IF NOT EXISTS idx_memories_tab_name ON memories(tab_name, created_at);
+    `,
   },
 ];
 

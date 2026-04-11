@@ -2,34 +2,43 @@
 
 ## Publishing to npm
 
-Beecork is published on npm as `beecork`. There is **no CI/CD** — publishing is manual.
+Publishing is handled by a GitHub Actions workflow (`.github/workflows/publish.yml`). Pushing code alone does NOT publish — the publish workflow is manually triggered via `workflow_dispatch` after CI passes green on the push.
 
-**Pushing to GitHub does NOT update npm.** Users running `npm install -g beecork` get whatever version was last published.
+**Pushing to GitHub does NOT update npm.** Users running `npm install -g beecork` get whatever version was last explicitly published via the workflow.
 
 ### Release workflow
 
 ```bash
-# 1. Bump version
-npm version patch   # or minor/major
+# 1. Commit and push your changes
+git add -A
+git commit -m "..."
+git push origin main
 
-# 2. Build (runs automatically via prepublishOnly)
-# 3. Publish
-npm publish
+# 2. Wait for CI to pass (lint + test + build on Node 20)
+gh run watch
 
-# 4. Push the version commit + tag
-git push && git push --tags
+# 3. Trigger the publish workflow (handles bump + build + publish + tag)
+gh workflow run publish.yml -f version_bump=patch   # or minor / major / none
+gh run watch
 ```
+
+The publish workflow runs `npm test`, `npm run build`, `npm version <bump>`, `npm publish` (with `NPM_TOKEN` secret), and `git push && git push --tags` — in that order. You do not need to run `npm version` or `npm publish` locally.
 
 ### When to publish
 
 Publish after any code changes that affect runtime behavior (bug fixes, new features, security fixes). No need to publish for docs-only or test-only changes.
 
+### Choosing the bump
+
+- `patch` — bug fixes, docs, internal refactors that don't change user-visible behavior
+- `minor` — new features, behavior changes, config shape changes that are backward-compatible via fallback reads
+- `major` — deliberate breaking changes that require users to update their configs or usage
+
 ## Project Structure
 
-- `src/` — TypeScript source (~102 files)
+- `src/` — TypeScript source (~100 files)
 - `dist/` — Compiled JS (built via `npm run build`)
 - `tests/unit/` — Vitest unit tests
-- `templates/CLAUDE.md` — Template injected into `~/.claude/CLAUDE.md` during setup
 - `audits/` — Code audit reports (gitignored)
 
 ## Key Commands
@@ -43,10 +52,19 @@ npm run lint         # ESLint
 
 ## Architecture
 
-CLI (Commander) -> Daemon (always-on) -> TabManager -> ClaudeSubprocess
-Channels (Telegram, WhatsApp) feed messages to tabs.
-MCP server communicates with daemon via shared SQLite + signal files.
-Pipe brain does intelligent routing via Anthropic API.
+```
+CLI (Commander)          Daemon (always-on)
+                              |
+                         TabManager
+                              |
+                         ClaudeSubprocess (per tab, spawned on demand)
+                              |
+                         MCP server (child of claude, shared SQLite + signal files)
+```
+
+All channels (Telegram, WhatsApp, Discord, Webhook) feed messages into a single shared pipeline at `src/channels/pipeline.ts`, which calls the deterministic router at `src/projects/router.ts`. The router picks a tab based on (1) explicit `/tab <name>` override, (2) project-name detection in the message, (3) sticky user context (10-min window), (4) learned pattern matching from the `routing_preferences` table, (5) disambiguation prompt for ambiguous matches, (6) category keywords, (7) fallback to `general`.
+
+No LLM is involved in routing. No Anthropic API key is required. Claude Code itself (spawned as a subprocess) uses the user's Claude Pro/Max subscription, not an API key.
 
 ## Conventions
 
@@ -54,5 +72,6 @@ Pipe brain does intelligent routing via Anthropic API.
 - Tab name validation is centralized in `TabManager.ensureTab()` via `validateTabName()`
 - Shared text utilities (chunkText, timeAgo, parseTabMessage) live in `src/util/text.ts`
 - Version is read from package.json via `src/version.ts` — never hardcode version strings
-- Config file (`~/.beecork/config.json`) is chmod 600 after write (contains API keys)
+- Config file (`~/.beecork/config.json`) is chmod 600 after write (contains Telegram/Discord tokens)
 - MCP server uses a cached singleton DB connection — not per-call
+- Every channel calls `processInboundMessage()` from `src/channels/pipeline.ts` — no channel-specific routing code

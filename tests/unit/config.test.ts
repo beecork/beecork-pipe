@@ -57,13 +57,12 @@ describe('Config', () => {
   describe('getTabConfig', () => {
     it('should return default config for unknown tab', () => {
       const config = getTabConfig('nonexistent');
-      expect(config.approvalMode).toBe('yolo');
-      expect(config.approvalTimeoutMinutes).toBe(30);
+      expect(config.workingDir).toBeDefined();
     });
 
     it('should return default tab config for "default"', () => {
       const config = getTabConfig('default');
-      expect(config.approvalMode).toBe('yolo');
+      expect(config.workingDir).toBeDefined();
     });
   });
 

@@ -91,7 +91,6 @@ interface Channel {
 interface ChannelContext {
   config: any;
   tabManager: any;
-  pipeBrain: any;
 }
 
 export default class ${className}Channel implements Channel {

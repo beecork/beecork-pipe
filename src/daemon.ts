@@ -1,12 +1,10 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { TabManager } from './session/manager.js';
 import { ChannelRegistry, TelegramChannel, WhatsAppChannel } from './channels/index.js';
 import { TaskScheduler } from './tasks/scheduler.js';
 import { WatcherScheduler } from './watchers/scheduler.js';
-import { PipeBrain } from './pipe/brain.js';
 import { ensureBeecorkDirs, getPidPath, getBeecorkHome } from './util/paths.js';
 import { execSync } from 'node:child_process';
 import { logger } from './util/logger.js';
@@ -19,7 +17,6 @@ let tabManager: TabManager;
 let channelRegistry: ChannelRegistry;
 let taskScheduler: TaskScheduler;
 let watcherScheduler: WatcherScheduler;
-let pipeBrain: PipeBrain | null = null;
 let pollInterval: ReturnType<typeof setInterval>;
 let shutdownFn: (() => Promise<void>) | null = null;
 const notificationProviders: NotificationProvider[] = [];
@@ -59,15 +56,10 @@ async function main(): Promise<void> {
   // 2. Initialize database
   getDb();
 
-  // 2b. Register this machine
-  const { registerThisMachine } = await import('./machines/index.js');
-  const projectPaths = config.pipe?.projectScanPaths || [os.homedir()];
-  registerThisMachine(projectPaths);
-
-  // 2c. Discover projects in workspace
+  // 2a. Discover projects in workspace
   try {
     const { discoverProjects, ensureCategory } = await import('./projects/index.js');
-    const projects = discoverProjects(config.pipe?.projectScanPaths);
+    const projects = discoverProjects(config.projectScanPaths);
     ensureCategory('general'); // Ensure default category exists
     logger.info(`Discovered ${projects.length} projects`);
   } catch (err) {
@@ -89,22 +81,15 @@ async function main(): Promise<void> {
   // 4. Create TabManager
   tabManager = new TabManager(config);
 
-  // 5. Initialize pipe brain (if API key configured)
-  if (config.pipe?.enabled && config.pipe?.anthropicApiKey) {
-    pipeBrain = new PipeBrain(config, tabManager);
-    const projectCount = await pipeBrain.discoverProjects();
-    logger.info(`Pipe brain initialized — ${projectCount} projects discovered`);
-  }
-
-  // 6. Ensure default tab
+  // 5. Ensure default tab
   tabManager.ensureTab('default');
 
-  // 7. Recover crashed tabs
+  // 6. Recover crashed tabs
   await recoverCrashedTabs();
 
   // Start channels via registry
   channelRegistry = new ChannelRegistry();
-  const channelCtx = { config, tabManager, pipeBrain, notifyCallback: broadcastNotify };
+  const channelCtx = { config, tabManager, notifyCallback: broadcastNotify };
 
   if (config.telegram?.token) {
     channelRegistry.register(new TelegramChannel(channelCtx));
@@ -166,9 +151,6 @@ async function main(): Promise<void> {
 
   // Wire up broadcast notifications to all active channels
   tabManager.setNotifyCallback(broadcastNotify);
-  if (pipeBrain) {
-    pipeBrain.setNotifyCallback(broadcastNotify);
-  }
 
   // 9. Start task scheduler
   taskScheduler = new TaskScheduler(tabManager, broadcastNotify);

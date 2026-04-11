@@ -67,8 +67,7 @@ export function getDb(): Database.Database {
   walInterval = setInterval(() => {
     try {
       db?.pragma('wal_checkpoint(PASSIVE)');
-      // Prune old routing/permission history (keep last 1000 entries)
-      db?.exec('DELETE FROM routing_history WHERE created_at < (SELECT created_at FROM routing_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
+      // Prune old permission history (keep last 1000 entries)
       db?.exec('DELETE FROM permission_history WHERE created_at < (SELECT created_at FROM permission_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
       db?.exec("DELETE FROM activity_log WHERE created_at < datetime('now', '-90 days')");
     } catch (err) {

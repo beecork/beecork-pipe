@@ -331,7 +331,7 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /register, /link, /users, /cost, /activity, /handoff, /machines)
+    // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /register, /link, /users, /cost, /activity, /handoff)
     const { handleSharedCommand } = await import('./command-handler.js');
     const result = await handleSharedCommand({
       userId: String(userId || 'default'),
@@ -388,109 +388,96 @@ export class TelegramChannel implements Channel {
       let responseError: boolean;
       let responseTab: string;
 
-      if (this.ctx.pipeBrain) {
-        // PipeBrain path is Telegram-specific (not shared in pipeline)
-        const pipeResult = await this.ctx.pipeBrain.process(text, { chatId, userId: 0, messageId });
-        responseText = pipeResult.response.text || '(empty response)';
-        responseError = pipeResult.response.error;
-        responseTab = pipeResult.tabName;
+      // Telegram-specific: streaming message edits
+      let streamMsgId: number | null = null;
+      let streamBuffer = '';
+      let lastEditTime = 0;
+      // We need the effective tab name for the stream prefix, but it's determined
+      // inside the pipeline. Use a mutable ref that the pipeline result will fill.
+      let effectiveTabForStream = overrideTabName || tabName;
 
-        if (pipeResult.decisions.length > 0) {
-          const decisionText = pipeResult.decisions.join('\n');
-          await this.bot.sendMessage(chatId, decisionText);
-        }
-      } else {
-        // Telegram-specific: streaming message edits
-        let streamMsgId: number | null = null;
-        let streamBuffer = '';
-        let lastEditTime = 0;
-        // We need the effective tab name for the stream prefix, but it's determined
-        // inside the pipeline. Use a mutable ref that the pipeline result will fill.
-        let effectiveTabForStream = overrideTabName || tabName;
-
-        const onTextChunk = async (chunk: string) => {
-          streamBuffer += chunk;
-          const now = Date.now();
-          if (streamBuffer.length < 100 || now - lastEditTime < 1000) return;
-          lastEditTime = now;
-          try {
-            const prefix = effectiveTabForStream !== 'default' ? `[${effectiveTabForStream}] ` : '';
-            const preview = prefix + streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
-            if (!streamMsgId) {
-              const sent = await this.bot.sendMessage(chatId, preview);
-              streamMsgId = sent.message_id;
-            } else {
-              await this.bot.editMessageText(preview, { chat_id: chatId, message_id: streamMsgId });
-            }
-          } catch { /* edit failures are non-critical */ }
-        };
-
-        // Shared pipeline handles: routing, media prompt, progress, sendMessage, TTS
-        const pipelineResult = await processInboundMessage({
-          text,
-          media,
-          channelId: 'telegram',
-          tabManager: this.ctx.tabManager,
-          voiceReplyMode: this.ctx.config.voice?.replyMode,
-          ttsProvider: this.ttsProvider,
-          userId: String(chatId),
-          sendProgress: (msg) => {
-            this.bot.sendMessage(chatId, msg).catch(() => {});
-          },
-          overrideTabName,
-          onTextChunk,
-        });
-
-        // Empty result means no prompt and no media
-        if (!pipelineResult.responseText) {
-          clearInterval(typingInterval);
-          clearTimeout(stillWorkingTimeout);
-          return;
-        }
-
-        // Update the effective tab for stream prefix (now known)
-        effectiveTabForStream = pipelineResult.tabName;
-        responseText = pipelineResult.responseText;
-        responseError = pipelineResult.isError;
-        responseTab = pipelineResult.tabName;
-
-        // Telegram-specific: if streaming was active and no error, edit the final message
-        if (streamMsgId && !responseError) {
-          clearInterval(typingInterval);
-          clearTimeout(stillWorkingTimeout);
-          await this.setReaction(chatId, messageId, '✅');
-
-          // Send voice if available (even with streaming)
-          if (pipelineResult.audioPath) {
-            await this.bot.sendVoice(chatId, pipelineResult.audioPath);
-            if (pipelineResult.voiceOnly) return;
+      const onTextChunk = async (chunk: string) => {
+        streamBuffer += chunk;
+        const now = Date.now();
+        if (streamBuffer.length < 100 || now - lastEditTime < 1000) return;
+        lastEditTime = now;
+        try {
+          const prefix = effectiveTabForStream !== 'default' ? `[${effectiveTabForStream}] ` : '';
+          const preview = prefix + streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
+          if (!streamMsgId) {
+            const sent = await this.bot.sendMessage(chatId, preview);
+            streamMsgId = sent.message_id;
+          } else {
+            await this.bot.editMessageText(preview, { chat_id: chatId, message_id: streamMsgId });
           }
+        } catch { /* edit failures are non-critical */ }
+      };
 
-          try {
-            const prefix = responseTab !== 'default' ? `[${responseTab}] ` : '';
-            const finalText = prefix + responseText;
-            if (finalText.length <= 4096) {
-              await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
-            } else {
-              await this.sendResponse(chatId, responseText, responseTab);
-            }
-          } catch {
-            await this.sendResponse(chatId, responseText, responseTab);
-          }
-          return;
-        }
+      // Shared pipeline handles: routing, media prompt, progress, sendMessage, TTS
+      const pipelineResult = await processInboundMessage({
+        text,
+        media,
+        channelId: 'telegram',
+        tabManager: this.ctx.tabManager,
+        voiceReplyMode: this.ctx.config.voice?.replyMode,
+        ttsProvider: this.ttsProvider,
+        userId: String(chatId),
+        sendProgress: (msg) => {
+          this.bot.sendMessage(chatId, msg).catch(() => {});
+        },
+        overrideTabName,
+        onTextChunk,
+      });
 
-        // Send voice reply if TTS generated audio (non-streaming path)
+      // Empty result means no prompt and no media
+      if (!pipelineResult.responseText) {
+        clearInterval(typingInterval);
+        clearTimeout(stillWorkingTimeout);
+        return;
+      }
+
+      // Update the effective tab for stream prefix (now known)
+      effectiveTabForStream = pipelineResult.tabName;
+      responseText = pipelineResult.responseText;
+      responseError = pipelineResult.isError;
+      responseTab = pipelineResult.tabName;
+
+      // Telegram-specific: if streaming was active and no error, edit the final message
+      if (streamMsgId && !responseError) {
+        clearInterval(typingInterval);
+        clearTimeout(stillWorkingTimeout);
+        await this.setReaction(chatId, messageId, '✅');
+
+        // Send voice if available (even with streaming)
         if (pipelineResult.audioPath) {
-          clearInterval(typingInterval);
-          clearTimeout(stillWorkingTimeout);
-          await this.setReaction(chatId, messageId, responseError ? '❌' : '✅');
           await this.bot.sendVoice(chatId, pipelineResult.audioPath);
           if (pipelineResult.voiceOnly) return;
-          if (!responseError) {
+        }
+
+        try {
+          const prefix = responseTab !== 'default' ? `[${responseTab}] ` : '';
+          const finalText = prefix + responseText;
+          if (finalText.length <= 4096) {
+            await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
+          } else {
             await this.sendResponse(chatId, responseText, responseTab);
-            return;
           }
+        } catch {
+          await this.sendResponse(chatId, responseText, responseTab);
+        }
+        return;
+      }
+
+      // Send voice reply if TTS generated audio (non-streaming path)
+      if (pipelineResult.audioPath) {
+        clearInterval(typingInterval);
+        clearTimeout(stillWorkingTimeout);
+        await this.setReaction(chatId, messageId, responseError ? '❌' : '✅');
+        await this.bot.sendVoice(chatId, pipelineResult.audioPath);
+        if (pipelineResult.voiceOnly) return;
+        if (!responseError) {
+          await this.sendResponse(chatId, responseText, responseTab);
+          return;
         }
       }
 

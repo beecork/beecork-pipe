@@ -30,8 +30,15 @@ import type { BeecorkConfig } from '../../src/types.js';
 const mockConfig: BeecorkConfig = {
   telegram: { token: '', allowedUserIds: [] },
   claudeCode: { bin: 'claude', defaultFlags: ['--dangerously-skip-permissions'] },
-  tabs: { default: { workingDir: '/tmp', approvalMode: 'yolo', approvalTimeoutMinutes: 30 } },
-  memory: { enabled: true, dbPath: '/tmp/test.db', maxLongTermEntries: 1000 },
+  tabs: { default: { workingDir: '/tmp' } },
+  memory: { dbPath: '/tmp/test.db', maxLongTermEntries: 1000 },
+  pipe: {
+    enabled: false,
+    anthropicApiKey: '',
+    routingModel: 'claude-haiku-4-5-20251001',
+    confidenceThreshold: 0.75,
+    projectScanPaths: [],
+  },
   deployment: 'local',
 };
 

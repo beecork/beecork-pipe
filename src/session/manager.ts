@@ -6,7 +6,6 @@ import { ContextMonitor, type ContextAction } from './context-monitor.js';
 import { getDb } from '../db/index.js';
 import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
-import { extractMemories, getRelevantMemories } from '../memory/extractor.js';
 import { logActivity } from '../timeline/index.js';
 import { getAllKnowledge, formatKnowledgeForContext } from '../knowledge/index.js';
 import type {
@@ -110,7 +109,7 @@ export class TabManager {
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; skipExtraction?: boolean; projectPath?: string; _compactionDepth?: number }): Promise<SendResult> {
+  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; projectPath?: string; _compactionDepth?: number }): Promise<SendResult> {
     const tab = this.ensureTab(tabName, options?.projectPath);
 
     // If a subprocess is already running on this tab, queue the message
@@ -128,7 +127,7 @@ export class TabManager {
       });
     }
 
-    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.skipExtraction, options?.onToolUse, options?._compactionDepth);
+    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.onToolUse, options?._compactionDepth);
   }
 
   /** Get all tabs from the database */
@@ -202,7 +201,7 @@ export class TabManager {
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, skipExtraction?: boolean, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number): Promise<SendResult> {
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number): Promise<SendResult> {
     const db = getDb();
 
     logActivity('task_started', 'Processing message', { tabName: tab.name, details: prompt.slice(0, 500) });
@@ -221,28 +220,10 @@ export class TabManager {
       }
     }
 
-    // Log approval mode (full interactive approval coming in a future release)
-    const tabConfig = this.config.tabs[tab.name] || this.config.tabs['default'];
-    if (tabConfig?.approvalMode && tabConfig.approvalMode !== 'yolo') {
-      logger.warn(`Tab "${tab.name}" has approvalMode="${tabConfig.approvalMode}" — interactive approval not yet implemented, running in yolo mode`);
-    }
-
-    // Inject knowledge from all three layers
+    // Inject knowledge (global markdown + project markdown + tab facts)
     const knowledge = getAllKnowledge(tab.workingDir, tab.name);
     const knowledgeContext = formatKnowledgeForContext(knowledge);
-    let enrichedPrompt = prompt;
-    if (knowledgeContext) {
-      enrichedPrompt = `${knowledgeContext}\n\n${prompt}`;
-    }
-
-    // Also inject relevant memories as fallback (additive)
-    const memories = getRelevantMemories(tab.name);
-    if (memories.length > 0) {
-      const memoryContext = memories.map(m => `- ${m}`).join('\n');
-      if (!knowledgeContext) {
-        enrichedPrompt = `[Context from memory:\n${memoryContext}\n]\n\n${prompt}`;
-      }
-    }
+    const enrichedPrompt = knowledgeContext ? `${knowledgeContext}\n\n${prompt}` : prompt;
 
     // Store user message
     db.prepare('INSERT INTO messages (tab_id, role, content) VALUES (?, ?, ?)')
@@ -382,16 +363,12 @@ export class TabManager {
             // Ask Claude for a structured summary
             const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
             this.sendMessage(tab.name, summaryPrompt, { _compactionDepth: currentDepth + 1 }).then(summaryResult => {
-              // Store summary as checkpoint memory
-              db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)')
-                .run(`[checkpoint] ${summaryResult.text}`, tab.name, 'auto');
-
               // Reset session: new session ID so next message starts fresh with summary context
               const newSessionId = uuidv4();
               db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(newSessionId, tab.id);
               logger.info(`[${tab.name}] Context compacted — new session ${newSessionId.slice(0, 8)}...`);
 
-              // Continue with original goal using the summary as context
+              // Continue with original goal using the summary as in-prompt context (not persisted)
               const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
               this.sendMessage(tab.name, continuationPrompt, { onTextChunk, _compactionDepth: currentDepth + 1 }).then(resolve).catch(reject);
             }).catch(err => {
@@ -419,14 +396,6 @@ export class TabManager {
           });
 
           resolve(result);
-
-          // Auto-extract memories from completed sessions (fire and forget)
-          // Skip if pipe brain already handles extraction via PipeBrain.learn()
-          if (!result.error && result.text && !skipExtraction) {
-            extractMemories(this.config, tab.name, result.text, result.durationMs).catch(err => {
-              logger.error(`[${tab.name}] Memory extraction error:`, err);
-            });
-          }
 
           // Process next queued message (prepend loop warning if needed)
           if (loopWarningPending && this.messageQueues.get(tab.name)?.length) {
