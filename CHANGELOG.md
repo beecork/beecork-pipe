@@ -2,6 +2,11 @@
 
 All notable changes to Beecork are documented here.
 
+## [1.4.2] — 2026-04-11
+
+### Changed
+- **`engines.node` bumped from `>=22` to `>=24`.** Node.js 22 reached end-of-life on 2026-03-24. Beecork now officially supports only Active LTS (Node 24) and above. Users on Node 22 will see an `EBADENGINE` warning on install prompting them to upgrade. No source code changes required — CI, publish workflow, and production have all been running on Node 24 since 1.4.1.
+
 ## [1.4.1] — 2026-04-11
 
 ### Changed
