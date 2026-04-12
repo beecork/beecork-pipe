@@ -48,9 +48,11 @@ export class WhatsAppChannel implements Channel {
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
       const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+      const pino = (await import('pino')).default;
       this.sock = makeWASocket({
         auth: state,
         version,
+        logger: pino({ level: 'silent' }),
       });
 
       const sock = this.sock as any;
