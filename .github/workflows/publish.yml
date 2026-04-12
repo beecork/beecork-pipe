@@ -52,3 +52,17 @@ jobs:
       - name: Push version commit and tag
         if: ${{ inputs.version_bump != 'none' }}
         run: git push && git push --tags
+
+      - name: Upgrade beecork on cloud server
+        if: ${{ secrets.CLOUD_SSH_KEY != '' }}
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.CLOUD_SSH_KEY }}
+
+      - name: Run cloud upgrade
+        if: ${{ secrets.CLOUD_SSH_KEY != '' }}
+        run: |
+          ssh-keyscan -H 167.235.142.11 >> ~/.ssh/known_hosts
+          VERSION=$(node -p "require('./package.json').version")
+          echo "Upgrading cloud server to beecork@${VERSION}..."
+          ssh root@167.235.142.11 "npm install -g beecork@${VERSION} && for u in \$(ls /home/ | grep ^bee); do su - \$u -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart beecork' || true; done && echo 'All user daemons restarted'"

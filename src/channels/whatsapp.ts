@@ -49,15 +49,23 @@ export class WhatsAppChannel implements Channel {
 
       this.sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
       });
 
       const sock = this.sock as any;
 
       sock.ev.on('creds.update', saveCreds);
 
-      sock.ev.on('connection.update', (update: any) => {
-        const { connection, lastDisconnect } = update;
+      sock.ev.on('connection.update', async (update: any) => {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) {
+          try {
+            const qrcodeTerminal = await import('qrcode-terminal');
+            (qrcodeTerminal.default || qrcodeTerminal).generate(qr, { small: true });
+            logger.info('WhatsApp QR code displayed — scan with your phone');
+          } catch {
+            logger.warn('WhatsApp QR code available but could not render. Install qrcode-terminal.');
+          }
+        }
         if (connection === 'close') {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           if (reason !== DisconnectReason.loggedOut) {

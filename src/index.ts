@@ -237,12 +237,19 @@ program
 
       const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: true,
       });
 
       sock.ev.on('creds.update', saveCreds);
 
-      sock.ev.on('connection.update', (update: { connection?: string; lastDisconnect?: { error?: Error } }) => {
+      sock.ev.on('connection.update', async (update: { connection?: string; lastDisconnect?: { error?: Error }; qr?: string }) => {
+        if (update.qr) {
+          try {
+            const qrcodeTerminal = await import('qrcode-terminal');
+            (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
+          } catch {
+            console.log('QR data:', update.qr);
+          }
+        }
         if (update.connection === 'open') {
           console.log('\n✓ WhatsApp paired successfully!');
           console.log('  You can now start the daemon: beecork start\n');

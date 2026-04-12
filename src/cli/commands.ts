@@ -268,18 +268,24 @@ export async function updateBeecork(options: { check?: boolean }): Promise<void>
     await stopDaemon();
   }
 
-  console.log('Updating beecork...');
+  console.log(`Updating beecork from v${VERSION}...`);
   try {
     execSync('npm install -g beecork@latest', { stdio: 'inherit' });
-    console.log('Update complete!');
+    const newVersion = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
+    console.log(`Update complete! v${VERSION} → v${newVersion}`);
   } catch {
     console.error('Update failed. Try running: npm install -g beecork@latest');
   }
 
-  // Restart if it was running
+  // Restart if it was running — spawn the NEW binary so the freshly installed
+  // code is used, not the stale in-memory code from before the update.
   if (pid) {
     console.log('Restarting daemon...');
-    await startDaemon();
+    try {
+      execSync('beecork start', { stdio: 'inherit' });
+    } catch {
+      console.error('Could not restart daemon. Run "beecork start" manually.');
+    }
   }
 }
 
