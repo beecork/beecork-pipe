@@ -200,19 +200,49 @@ program
 
 program
   .command('whatsapp')
-  .description('Set up WhatsApp — enter phone number, then scan QR code to pair')
-  .action(async () => {
+  .description('Set up or disable WhatsApp')
+  .option('--disable', 'Disable WhatsApp and remove session')
+  .action(async (opts: { disable?: boolean }) => {
+    if (opts.disable) {
+      const { getConfig, saveConfig } = await import('./config.js');
+      const { getBeecorkHome } = await import('./util/paths.js');
+      const fs = await import('node:fs');
+      const config = getConfig();
+      if (config.whatsapp) {
+        config.whatsapp.enabled = false;
+        saveConfig(config);
+      }
+      // Remove session files
+      const sessionPath = `${getBeecorkHome()}/whatsapp-session`;
+      if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+      }
+      console.log('✓ WhatsApp disabled and session removed.');
+      // Restart daemon if running
+      const { getDaemonPid } = await import('./cli/helpers.js');
+      if (getDaemonPid()) {
+        const { execSync } = await import('node:child_process');
+        try {
+          execSync('beecork stop', { stdio: 'ignore' });
+          execSync('beecork start', { stdio: 'ignore' });
+          console.log('  Daemon restarted.');
+        } catch {
+          console.log('  Restart daemon: beecork stop && beecork start');
+        }
+      }
+      return;
+    }
     const readline = await import('node:readline');
     const fs = await import('node:fs');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
 
     console.log('\nWhatsApp Setup\n');
-    console.log('  WhatsApp connects via QR code scanning (like WhatsApp Web).');
-    console.log('  After entering your phone number, a QR code will appear.');
-    console.log('  Scan it with your phone to pair.\n');
+    console.log('  You need two WhatsApp accounts:');
+    console.log('  1. A bot account (separate SIM) — will scan the QR code to pair');
+    console.log('  2. Your personal number — allowed to message the bot\n');
 
-    const number = await ask('Your WhatsApp phone number (e.g., 14155551234)');
+    const number = await ask('Your personal WhatsApp number (the one that will message the bot, e.g., 14155551234)');
     if (!number) { console.log('No number provided. Cancelled.'); rl.close(); return; }
 
     const { getConfig, saveConfig } = await import('./config.js');
@@ -253,7 +283,7 @@ program
             try {
               const qrcodeTerminal = await import('qrcode-terminal');
               (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
-              console.log('Scan the QR code above with your phone (WhatsApp → Linked Devices → Link a Device)\n');
+              console.log('Scan with the BOT phone (WhatsApp → Linked Devices → Link a Device)\n');
             } catch {
               console.log('QR data:', update.qr);
             }
