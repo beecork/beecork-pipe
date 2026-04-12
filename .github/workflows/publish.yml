@@ -64,5 +64,7 @@ jobs:
         run: |
           ssh-keyscan -H 167.235.142.11 >> ~/.ssh/known_hosts
           VERSION=$(node -p "require('./package.json').version")
+          echo "Waiting 30s for npm CDN propagation..."
+          sleep 30
           echo "Upgrading cloud server to beecork@${VERSION}..."
           ssh root@167.235.142.11 "npm install -g beecork@${VERSION} && for u in \$(ls /home/ | grep ^bee); do su - \$u -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart beecork' || true; done && echo 'All user daemons restarted'"
