@@ -41,14 +41,16 @@ export class WhatsAppChannel implements Channel {
     this.ttsProvider = tts;
 
     try {
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage } = await import('@whiskeysockets/baileys');
+      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
       const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
 
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
+      const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
       this.sock = makeWASocket({
         auth: state,
+        version,
       });
 
       const sock = this.sock as any;

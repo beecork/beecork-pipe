@@ -231,40 +231,52 @@ program
 
     // Pair immediately — show QR code in this terminal
     try {
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = await import('@whiskeysockets/baileys');
+      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
-      const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
 
-      const sock = makeWASocket({
-        auth: state,
-      });
+      let attempts = 0;
+      const maxAttempts = 5;
 
-      sock.ev.on('creds.update', saveCreds);
+      const connect = async () => {
+        attempts++;
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+        const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+        const sock = makeWASocket({ auth: state, version });
 
-      sock.ev.on('connection.update', async (update: { connection?: string; lastDisconnect?: { error?: Error }; qr?: string }) => {
-        if (update.qr) {
-          try {
-            const qrcodeTerminal = await import('qrcode-terminal');
-            (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
-          } catch {
-            console.log('QR data:', update.qr);
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', async (update: { connection?: string; lastDisconnect?: { error?: Error }; qr?: string }) => {
+          if (update.qr) {
+            try {
+              const qrcodeTerminal = await import('qrcode-terminal');
+              (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
+            } catch {
+              console.log('QR data:', update.qr);
+            }
           }
-        }
-        if (update.connection === 'open') {
-          console.log('\n✓ WhatsApp paired successfully!');
-          console.log('  You can now start the daemon: beecork start\n');
-          sock.end(undefined);
-          process.exit(0);
-        }
-        if (update.connection === 'close') {
-          const reason = (update.lastDisconnect?.error as any)?.output?.statusCode;
-          if (reason === DisconnectReason.loggedOut) {
-            console.log('\n✗ WhatsApp logged out. Please try again.\n');
-            process.exit(1);
+          if (update.connection === 'open') {
+            console.log('\n✓ WhatsApp paired successfully!');
+            console.log('  You can now start the daemon: beecork start\n');
+            sock.end(undefined);
+            process.exit(0);
           }
-        }
-      });
+          if (update.connection === 'close') {
+            const reason = (update.lastDisconnect?.error as any)?.output?.statusCode;
+            if (reason === DisconnectReason.loggedOut) {
+              console.log('\n✗ WhatsApp logged out. Please try again.\n');
+              process.exit(1);
+            }
+            if (attempts >= maxAttempts) {
+              console.log(`\n✗ Could not connect after ${maxAttempts} attempts. Please try again later.\n`);
+              process.exit(1);
+            }
+            console.log(`Connection dropped, retrying (${attempts}/${maxAttempts})...`);
+            setTimeout(connect, 3000);
+          }
+        });
+      };
 
+      await connect();
       console.log('Scan the QR code above with your phone (WhatsApp → Linked Devices → Link a Device)');
       console.log('Waiting for pairing... (Ctrl+C to cancel)\n');
     } catch (err) {
