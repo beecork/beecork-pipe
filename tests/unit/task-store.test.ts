@@ -109,6 +109,51 @@ describe('TaskStore', () => {
     expect(store.update('nonexistent', { name: 'x' })).toBe(false);
   });
 
+  it('should clear next_run_at when schedule changes', () => {
+    const store = new TaskStore();
+    testDb.exec(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id, next_run_at)
+      VALUES ('t1', 'test', 'cron', '0 19 * * *', 'default', 'hello', 'local', '2026-05-13T19:00:00.000Z')`);
+
+    store.update('t1', { schedule: '0 20 * * *' });
+
+    const row = testDb.prepare('SELECT schedule, next_run_at FROM tasks WHERE id = ?').get('t1') as { schedule: string; next_run_at: string | null };
+    expect(row.schedule).toBe('0 20 * * *');
+    expect(row.next_run_at).toBeNull();
+  });
+
+  it('should clear next_run_at when scheduleType changes', () => {
+    const store = new TaskStore();
+    testDb.exec(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id, next_run_at)
+      VALUES ('t1', 'test', 'cron', '0 19 * * *', 'default', 'hello', 'local', '2026-05-13T19:00:00.000Z')`);
+
+    store.update('t1', { scheduleType: 'every', schedule: '30m' });
+
+    const row = testDb.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('t1') as { next_run_at: string | null };
+    expect(row.next_run_at).toBeNull();
+  });
+
+  it('should preserve next_run_at when only unrelated fields change', () => {
+    const store = new TaskStore();
+    testDb.exec(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id, next_run_at)
+      VALUES ('t1', 'test', 'cron', '0 19 * * *', 'default', 'hello', 'local', '2026-05-13T19:00:00.000Z')`);
+
+    store.update('t1', { name: 'renamed', message: 'changed' });
+
+    const row = testDb.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('t1') as { next_run_at: string };
+    expect(row.next_run_at).toBe('2026-05-13T19:00:00.000Z');
+  });
+
+  it('should honor explicit nextRunAt even when schedule changes', () => {
+    const store = new TaskStore();
+    testDb.exec(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id, next_run_at)
+      VALUES ('t1', 'test', 'cron', '0 19 * * *', 'default', 'hello', 'local', '2026-05-13T19:00:00.000Z')`);
+
+    store.update('t1', { schedule: '0 20 * * *', nextRunAt: '2026-06-01T20:00:00.000Z' });
+
+    const row = testDb.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('t1') as { next_run_at: string };
+    expect(row.next_run_at).toBe('2026-06-01T20:00:00.000Z');
+  });
+
   it('should delete a task', () => {
     const store = new TaskStore();
     testDb.exec(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id) VALUES ('t1', 'test', 'cron', '* * * * *', 'default', 'hello', 'local')`);

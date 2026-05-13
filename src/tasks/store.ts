@@ -53,7 +53,15 @@ export class TaskStore {
     const existing = this.get(id);
     if (!existing) return false;
 
+    // If the schedule changes, the stored next_run_at is no longer valid —
+    // null it out so the scheduler recomputes from the new expression on
+    // next load. Caller can override by explicitly passing nextRunAt.
+    const scheduleChanged =
+      (updates.schedule !== undefined && updates.schedule !== existing.schedule) ||
+      (updates.scheduleType !== undefined && updates.scheduleType !== existing.scheduleType);
     const merged = { ...existing, ...updates };
+    if (scheduleChanged && updates.nextRunAt === undefined) merged.nextRunAt = null;
+
     db.prepare(`UPDATE tasks SET name=?, schedule_type=?, schedule=?, tab_name=?, message=?, enabled=?, last_run_at=?, next_run_at=? WHERE id=?`).run(
       merged.name, merged.scheduleType, merged.schedule, merged.tabName, merged.message,
       merged.enabled ? 1 : 0, merged.lastRunAt, merged.nextRunAt, id,
