@@ -1,4 +1,4 @@
-import cron from 'node-cron';
+import { CronExpressionParser } from 'cron-parser';
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec } from 'node:child_process';
@@ -11,12 +11,12 @@ import type { Task } from '../types.js';
 
 export const execAsync = promisify(exec);
 
-interface Stoppable {
-  stop: () => void;
-}
-
 export class TaskScheduler {
-  private scheduledJobs: Map<string, Stoppable> = new Map();
+  // taskId -> due time in ms epoch
+  private nextRunAt: Map<string, number> = new Map();
+  // taskIds with an in-flight fireJob
+  private running: Set<string> = new Set();
+  private stopping = false;
   private store = new TaskStore();
 
   constructor(
@@ -26,11 +26,8 @@ export class TaskScheduler {
 
   /** Load all tasks from store and schedule them */
   loadAndSchedule(): void {
-    // Cancel existing
-    for (const [, task] of this.scheduledJobs) {
-      task.stop();
-    }
-    this.scheduledJobs.clear();
+    this.nextRunAt.clear();
+    this.stopping = false;
 
     const jobs = this.store.list();
     let scheduled = 0;
@@ -39,19 +36,34 @@ export class TaskScheduler {
     for (const job of jobs) {
       if (!job.enabled) continue;
 
-      // Detect missed fires: one-time "at" jobs whose time has passed but never ran
+      // Fast path: one-time 'at' tasks whose target time has passed without ever firing.
+      // (The general tick() loop would catch these too, but this keeps the original
+      // single-pass startup behavior — fire now and disable atomically.)
       if (job.scheduleType === 'at' && !job.lastRunAt) {
         const targetTime = new Date(job.schedule).getTime();
-        if (targetTime <= Date.now()) {
+        if (Number.isFinite(targetTime) && targetTime <= Date.now()) {
           logger.warn(`Task: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`);
           missedFires++;
-          this.fireJob(job);
-          this.store.update(job.id, { enabled: false }); // Disable after one-time execution
+          this.store.update(job.id, { enabled: false, nextRunAt: null });
+          void this.fireJob(job);
           continue;
         }
       }
 
-      this.scheduleJob(job);
+      // Seed nextRunAt: prefer stored value (catch-up after sleep/restart);
+      // otherwise compute fresh from now.
+      let due: number | null = null;
+      if (job.nextRunAt) {
+        const stored = new Date(job.nextRunAt).getTime();
+        if (Number.isFinite(stored)) due = stored;
+      }
+      if (due === null) {
+        due = this.computeNextRun(job, Date.now());
+        if (due === null) continue; // computeNextRun already logged
+        this.store.update(job.id, { nextRunAt: new Date(due).toISOString() });
+      }
+
+      this.nextRunAt.set(job.id, due);
       scheduled++;
     }
 
@@ -68,62 +80,74 @@ export class TaskScheduler {
     }
   }
 
-  /** Stop all scheduled tasks */
-  stopAll(): void {
-    for (const [, task] of this.scheduledJobs) {
-      task.stop();
+  /**
+   * Fire any tasks whose nextRunAt has elapsed. Called every ~5s by the daemon
+   * poll loop. This is the macOS-sleep-resilient replacement for setTimeout-driven
+   * cron heartbeats — after a wake, the next tick catches all overdue tasks.
+   */
+  tick(): void {
+    if (this.stopping) return;
+    const now = Date.now();
+
+    for (const [id, due] of [...this.nextRunAt]) {
+      if (this.stopping) return;
+      if (due > now) continue;
+      if (this.running.has(id)) continue;
+
+      const job = this.store.get(id);
+      if (!job || !job.enabled) {
+        this.nextRunAt.delete(id);
+        continue;
+      }
+
+      // Advance BEFORE firing — eliminates double-fire race if tick is re-entered
+      // before the async fireJob completes.
+      if (job.scheduleType === 'at') {
+        this.nextRunAt.delete(id);
+        this.store.update(id, { enabled: false, nextRunAt: null });
+      } else {
+        const next = this.computeNextRun(job, now);
+        if (next === null) {
+          this.nextRunAt.delete(id);
+          continue;
+        }
+        this.nextRunAt.set(id, next);
+        this.store.update(id, { nextRunAt: new Date(next).toISOString() });
+      }
+
+      this.running.add(id);
+      void this.fireJob(job).finally(() => this.running.delete(id));
     }
-    this.scheduledJobs.clear();
   }
 
-  private scheduleJob(job: Task): void {
-    switch (job.scheduleType) {
-      case 'cron': {
-        if (!cron.validate(job.schedule)) {
-          logger.error(`Task: invalid expression for "${job.name}": ${job.schedule}`);
-          return;
-        }
-        const task = cron.schedule(job.schedule, () => this.fireJob(job));
-        this.scheduledJobs.set(job.id, task);
-        break;
-      }
+  /** Stop the scheduler. In-flight fireJob promises are detached and resolve naturally. */
+  stopAll(): void {
+    this.stopping = true;
+    this.nextRunAt.clear();
+  }
 
-      case 'every': {
-        const cronExpr = intervalToCron(job.schedule);
-        if (cronExpr) {
-          if (!cron.validate(cronExpr)) {
-            logger.error(`Task: invalid cron expression for "${job.name}": ${cronExpr}`);
-            return;
+  /** Compute next run time in ms epoch, given a "from" anchor. Returns null if invalid. */
+  private computeNextRun(job: Task, fromMs: number): number | null {
+    try {
+      switch (job.scheduleType) {
+        case 'cron':
+          return CronExpressionParser.parse(job.schedule, { currentDate: new Date(fromMs) }).next().getTime();
+        case 'every': {
+          const expr = intervalToCron(job.schedule);
+          if (expr) {
+            return CronExpressionParser.parse(expr, { currentDate: new Date(fromMs) }).next().getTime();
           }
-          const task = cron.schedule(cronExpr, () => this.fireJob(job));
-          this.scheduledJobs.set(job.id, task);
-        } else {
-          // Use setInterval for non-cron-expressible intervals
-          const totalMs = intervalToMs(job.schedule);
-          if (totalMs) {
-            const timer = setInterval(() => this.fireJob(job), totalMs);
-            this.scheduledJobs.set(job.id, { stop: () => clearInterval(timer) });
-          } else {
-            logger.error(`Task: invalid interval for "${job.name}": ${job.schedule}`);
-          }
+          const ms = intervalToMs(job.schedule);
+          return ms ? fromMs + ms : null;
         }
-        break;
-      }
-
-      case 'at': {
-        const targetTime = new Date(job.schedule).getTime();
-        const delay = targetTime - Date.now();
-        if (delay <= 0) {
-          logger.warn(`Task: one-time task "${job.name}" is in the past, skipping`);
-          return;
+        case 'at': {
+          const t = new Date(job.schedule).getTime();
+          return Number.isFinite(t) ? t : null;
         }
-        const timer = setTimeout(() => {
-          this.fireJob(job);
-          this.store.update(job.id, { enabled: false });
-        }, delay);
-        this.scheduledJobs.set(job.id, { stop: () => clearTimeout(timer) });
-        break;
       }
+    } catch (err) {
+      logger.error(`Task: invalid expression for "${job.name}": ${job.schedule}`, err);
+      return null;
     }
   }
 
@@ -231,6 +255,6 @@ export function intervalToCron(interval: string): string | null {
   // Weekly intervals
   if (mins === 0 && hours === 0 && days === 0 && weeks > 0) return `0 0 * * 0`;
 
-  // Combined or large intervals -- return null, handled by setInterval in scheduleJob
+  // Combined or large intervals -- return null, handled by intervalToMs fallback
   return null;
 }

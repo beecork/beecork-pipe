@@ -168,6 +168,8 @@ async function main(): Promise<void> {
     try {
       taskScheduler.checkForReload();
       watcherScheduler.checkForReload();
+      taskScheduler.tick();
+      watcherScheduler.tick();
       tabManager.processPendingMessages();
       // Media cleanup every 60 seconds
       if (Date.now() - lastMediaCleanup > 60000) {

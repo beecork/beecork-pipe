@@ -1,5 +1,72 @@
-import { describe, it, expect } from 'vitest';
-import { intervalToCron, intervalToMs } from '../../src/tasks/scheduler.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { CronExpressionParser } from 'cron-parser';
+
+let testDb: Database.Database;
+
+vi.mock('../../src/db/index.js', () => ({
+  getDb: () => testDb,
+}));
+
+vi.mock('node:fs', () => ({
+  default: {
+    existsSync: vi.fn().mockReturnValue(false),
+    unlinkSync: vi.fn(),
+    readFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    promises: { appendFile: vi.fn().mockResolvedValue(undefined) },
+  },
+}));
+
+vi.mock('../../src/util/paths.js', () => ({
+  getCronReloadSignalPath: () => '/tmp/.cron-reload',
+  getLogsDir: () => '/tmp/.beecork/logs',
+  getCrontabPath: () => '/tmp/crontab.json',
+  getBeecorkHome: () => '/tmp/.beecork',
+}));
+
+vi.mock('../../src/util/logger.js', () => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
+}));
+
+import { TaskScheduler, intervalToCron, intervalToMs } from '../../src/tasks/scheduler.js';
+import type { TabManager } from '../../src/session/manager.js';
+
+const TASKS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS tasks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  schedule_type TEXT NOT NULL,
+  schedule TEXT NOT NULL,
+  tab_name TEXT NOT NULL DEFAULT 'default',
+  message TEXT NOT NULL,
+  payload_type TEXT DEFAULT 'agentTurn',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  user_id TEXT NOT NULL DEFAULT 'local',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_run_at TEXT,
+  next_run_at TEXT
+);
+`;
+
+function insertCronTask(id: string, schedule: string, nextRunAt: string | null) {
+  testDb.prepare(
+    `INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, user_id, next_run_at)
+     VALUES (?, ?, 'cron', ?, 'default', 'hello', 'local', ?)`,
+  ).run(id, `task-${id}`, schedule, nextRunAt);
+}
+
+function makeTabManager() {
+  return {
+    ensureTab: vi.fn(),
+    sendMessage: vi.fn().mockResolvedValue({ text: 'ok', error: false }),
+  } as unknown as TabManager;
+}
+
+// Yield to the microtask queue so the void-detached fireJob promise can run.
+const flush = async () => {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+};
 
 describe('intervalToCron', () => {
   it('should convert minutes', () => {
@@ -22,7 +89,7 @@ describe('intervalToCron', () => {
     expect(intervalToCron('1w')).toBe('0 0 * * 0');
   });
 
-  it('should return null for combined intervals (handled by setInterval)', () => {
+  it('should return null for combined intervals (handled by intervalToMs fallback)', () => {
     expect(intervalToCron('1h30m')).toBeNull();
     expect(intervalToCron('2h15m')).toBeNull();
   });
@@ -69,5 +136,73 @@ describe('intervalToMs', () => {
 
   it('should return null for zero interval', () => {
     expect(intervalToMs('0m')).toBeNull();
+  });
+});
+
+describe('TaskScheduler.tick', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:');
+    testDb.exec(TASKS_SCHEMA);
+  });
+
+  afterEach(() => {
+    testDb.close();
+  });
+
+  it('fires a ready task whose nextRunAt has elapsed', async () => {
+    const pastIso = new Date(Date.now() - 1000).toISOString();
+    insertCronTask('t1', '*/5 * * * *', pastIso);
+
+    const tabManager = makeTabManager();
+    const scheduler = new TaskScheduler(tabManager, null);
+    scheduler.loadAndSchedule();
+    scheduler.tick();
+    await flush();
+
+    expect(tabManager.sendMessage).toHaveBeenCalledTimes(1);
+    expect(tabManager.sendMessage).toHaveBeenCalledWith('default', 'hello');
+
+    const row = testDb.prepare('SELECT last_run_at FROM tasks WHERE id = ?').get('t1') as { last_run_at: string };
+    expect(row.last_run_at).toBeTruthy();
+  });
+
+  it('advances nextRunAt to a future cron match after firing', async () => {
+    const pastIso = new Date(Date.now() - 1000).toISOString();
+    insertCronTask('t2', '*/5 * * * *', pastIso);
+
+    const tabManager = makeTabManager();
+    const scheduler = new TaskScheduler(tabManager, null);
+    scheduler.loadAndSchedule();
+    scheduler.tick();
+    await flush();
+
+    const row = testDb.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('t2') as { next_run_at: string };
+    const newNext = new Date(row.next_run_at).getTime();
+    expect(newNext).toBeGreaterThan(Date.now());
+
+    // Should match what cron-parser produces for the same expression
+    const expected = CronExpressionParser.parse('*/5 * * * *').next().getTime();
+    expect(newNext).toBeCloseTo(expected, -2); // within ~100ms
+  });
+
+  it('fires exactly once after a long sleep window (24h overdue)', async () => {
+    const overdueIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    insertCronTask('t3', '*/5 * * * *', overdueIso);
+
+    const tabManager = makeTabManager();
+    const scheduler = new TaskScheduler(tabManager, null);
+    scheduler.loadAndSchedule();
+
+    scheduler.tick();
+    await flush();
+    expect(tabManager.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Second tick should NOT re-fire — nextRunAt has been advanced to the future.
+    scheduler.tick();
+    await flush();
+    expect(tabManager.sendMessage).toHaveBeenCalledTimes(1);
+
+    const row = testDb.prepare('SELECT next_run_at FROM tasks WHERE id = ?').get('t3') as { next_run_at: string };
+    expect(new Date(row.next_run_at).getTime()).toBeGreaterThan(Date.now());
   });
 });

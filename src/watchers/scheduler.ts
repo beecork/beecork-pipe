@@ -11,12 +11,17 @@ const WATCHER_RELOAD_SIGNAL_NAME = '.watcher-reload';
 
 export class WatcherScheduler {
   private store = new WatcherStore();
-  private intervals = new Map<string, NodeJS.Timeout>();
+  // watcherId -> due time in ms epoch for next check
+  private nextCheckAt: Map<string, number> = new Map();
+  // watcherIds with an in-flight runCheck
+  private running: Set<string> = new Set();
+  private stopping = false;
   public onNotify: ((text: string) => Promise<void>) | null = null;
 
   /** Load all watchers from store and schedule them */
   loadAndSchedule(): void {
     this.stopAll();
+    this.stopping = false;
 
     const watchers = this.store.list();
     let scheduled = 0;
@@ -30,8 +35,18 @@ export class WatcherScheduler {
         continue;
       }
 
-      const timer = setInterval(() => this.runCheck(watcher), ms);
-      this.intervals.set(watcher.id, timer);
+      // Seed nextCheckAt: if we have a lastCheckAt, fire `intervalMs` after it
+      // (catches up overdue checks after sleep/restart on the next tick).
+      // Otherwise wait `intervalMs` before first fire — matches today's setInterval semantics.
+      let due: number;
+      if (watcher.lastCheckAt) {
+        const last = new Date(watcher.lastCheckAt).getTime();
+        due = Number.isFinite(last) ? last + ms : Date.now() + ms;
+      } else {
+        due = Date.now() + ms;
+      }
+
+      this.nextCheckAt.set(watcher.id, due);
       scheduled++;
     }
 
@@ -50,12 +65,43 @@ export class WatcherScheduler {
     }
   }
 
-  /** Stop all scheduled watchers */
-  stopAll(): void {
-    for (const [, timer] of this.intervals) {
-      clearInterval(timer);
+  /**
+   * Fire any watchers whose nextCheckAt has elapsed. Called every ~5s by the daemon
+   * poll loop. Sleep-resilient: after wake, the next tick catches all overdue checks.
+   */
+  tick(): void {
+    if (this.stopping) return;
+    const now = Date.now();
+
+    for (const [id, due] of [...this.nextCheckAt]) {
+      if (this.stopping) return;
+      if (due > now) continue;
+      if (this.running.has(id)) continue;
+
+      const watcher = this.store.get(id);
+      if (!watcher || !watcher.enabled) {
+        this.nextCheckAt.delete(id);
+        continue;
+      }
+
+      const intervalMs = parseScheduleToMs(watcher.schedule);
+      if (!intervalMs) {
+        this.nextCheckAt.delete(id);
+        continue;
+      }
+
+      // Advance BEFORE running — eliminates double-fire race
+      this.nextCheckAt.set(id, now + intervalMs);
+
+      this.running.add(id);
+      void this.runCheck(watcher).finally(() => this.running.delete(id));
     }
-    this.intervals.clear();
+  }
+
+  /** Stop the scheduler. In-flight runCheck promises detach and resolve naturally. */
+  stopAll(): void {
+    this.stopping = true;
+    this.nextCheckAt.clear();
   }
 
   private async runCheck(watcher: Watcher): Promise<void> {
