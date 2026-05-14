@@ -32,6 +32,10 @@ export function getPidPath(): string {
   return path.join(getBeecorkHome(), 'beecork.pid');
 }
 
+export function getRuntimeInfoPath(): string {
+  return path.join(getBeecorkHome(), 'runtime.json');
+}
+
 export function getCronReloadSignalPath(): string {
   return path.join(getBeecorkHome(), '.cron-reload');
 }

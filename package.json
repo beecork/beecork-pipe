@@ -16,7 +16,8 @@
     "test": "vitest",
     "lint": "eslint src/",
     "build:css": "tailwindcss --content src/dashboard/html.ts --minify",
-    "prepublishOnly": "npm test && npm run build"
+    "prepublishOnly": "npm test && npm run build",
+    "postinstall": "node scripts/postinstall.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -42,7 +43,8 @@
     "vitest": "^4.1.4"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "scripts/postinstall.mjs"
   ],
   "keywords": [
     "claude",

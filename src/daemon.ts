@@ -12,6 +12,7 @@ import { cleanupMedia } from './media/store.js';
 import { createNotificationProvider, type NotificationProvider } from './notifications/index.js';
 import { VERSION } from './version.js';
 import { logActivity } from './timeline/index.js';
+import { findInstallRoot, getDaemonScript, writeRuntimeInfo, removeRuntimeInfo } from './util/install-info.js';
 
 let tabManager: TabManager;
 let channelRegistry: ChannelRegistry;
@@ -77,6 +78,21 @@ async function main(): Promise<void> {
     fs.writeFileSync(pidPath, String(process.pid));
   }
   logger.info(`PID file written: ${process.pid}`);
+
+  // 3a. Write runtime.json so the CLI / postinstall can detect install-path divergence
+  try {
+    const installRoot = findInstallRoot(import.meta.url);
+    writeRuntimeInfo({
+      pid: process.pid,
+      version: VERSION,
+      installRoot,
+      daemonScript: getDaemonScript(installRoot),
+      startedAt: new Date().toISOString(),
+      nodeVersion: process.version,
+    });
+  } catch (err) {
+    logger.warn('Could not write runtime.json (auto-heal may be skipped):', err);
+  }
 
   // 4. Create TabManager
   tabManager = new TabManager(config);
@@ -205,6 +221,7 @@ async function main(): Promise<void> {
 
     const pidPath = getPidPath();
     if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
+    removeRuntimeInfo();
 
     logActivity('system_event', 'Beecork daemon stopped');
     logger.info('Beecork daemon stopped.');

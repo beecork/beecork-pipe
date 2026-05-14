@@ -3,6 +3,20 @@ import { Command } from 'commander';
 import { platform } from 'node:os';
 import { VERSION } from './version.js';
 import { setupWizard } from './cli/setup.js';
+import { autoHealInstall } from './util/auto-heal.js';
+
+// Auto-heal install-path divergence: if the daemon is running from a different
+// beecork install than this CLI binary (e.g. user did `npm install -g beecork@latest`
+// to a different prefix than the launchd plist points at), rewrite the unit file
+// and signal the daemon to restart. Idempotent no-op otherwise. Never blocks the CLI.
+{
+  const heal = autoHealInstall(import.meta.url);
+  if (heal.action !== 'noop' && heal.action !== 'skip') {
+    const target = heal.newDaemonScript ?? '(running daemon)';
+    process.stderr.write(`[beecork] auto-heal: ${heal.action} → ${target}\n`);
+  }
+}
+
 import {
   startDaemon,
   stopDaemon,
