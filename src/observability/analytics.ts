@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import { getDb } from '../db/index.js';
 
 export interface CostSummary {
@@ -55,9 +56,13 @@ export function getActivitySummary(hours: number = 24): ActivitySummary {
   };
 }
 
-export function checkAnomalies(): string | null {
-  const db = getDb();
+const ANOMALY_STATE_KEY = 'anomaly_spend_state';
 
+/**
+ * Returns a notification only on state transitions (ok↔breach), persisting
+ * the state in the `preferences` table so daemon restarts don't re-fire.
+ */
+export function checkAnomaliesWithDb(db: Database.Database): string | null {
   // Today's spend
   const todaySpend = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')").get() as any).total;
 
@@ -71,11 +76,27 @@ export function checkAnomalies(): string | null {
     )
   `).get() as any).avg;
 
-  if (avgSpend > 0 && todaySpend > avgSpend * 2) {
+  const isBreach = avgSpend > 0 && todaySpend > avgSpend * 2;
+  const newState = isBreach ? 'breach' : 'ok';
+
+  const prevRow = db.prepare('SELECT value FROM preferences WHERE key = ?').get(ANOMALY_STATE_KEY) as { value: string } | undefined;
+  const prevState = prevRow?.value ?? 'ok';
+
+  if (newState === prevState) return null;
+
+  db.prepare(
+    `INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, datetime('now'))
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+  ).run(ANOMALY_STATE_KEY, newState);
+
+  if (isBreach) {
     return `⚠️ Anomaly: Today's spend ($${todaySpend.toFixed(4)}) exceeds 2x your 7-day average ($${avgSpend.toFixed(4)}/day)`;
   }
+  return `✅ Recovered: Today's spend ($${todaySpend.toFixed(4)}) is back within 2x your 7-day average ($${avgSpend.toFixed(4)}/day)`;
+}
 
-  return null;
+export function checkAnomalies(): string | null {
+  return checkAnomaliesWithDb(getDb());
 }
 
 export function formatCostSummary(summary: CostSummary): string {
