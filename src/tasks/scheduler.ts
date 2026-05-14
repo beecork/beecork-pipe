@@ -176,9 +176,10 @@ export class TaskScheduler {
       this.store.update(job.id, { lastRunAt: new Date().toISOString() });
 
       const firstLine = result.text.split('\n')[0]?.slice(0, 200) || '(no output)';
+      const status = result.error ? 'ERROR' : 'SUCCESS';
 
-      // Log result
-      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] SUCCESS: ${firstLine}\n`);
+      // Log result (status reflects subprocess exit / is_error, not just completion)
+      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ${status}: ${firstLine}\n`);
 
       // Notify (separate try/catch -- notification failure shouldn't be reported as job failure)
       try {

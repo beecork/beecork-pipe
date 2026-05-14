@@ -166,13 +166,15 @@ export interface StreamAssistant {
 
 export interface StreamResult {
   type: 'result';
-  subtype: 'success' | 'error';
+  subtype: 'success' | 'error' | 'error_during_execution';
   is_error: boolean;
   duration_ms: number;
-  result: string;
+  // Present on success; absent on error_during_execution (CLI emits errors[] instead).
+  result?: string;
+  errors?: string[];
   session_id: string;
-  total_cost_usd: number;
-  usage: StreamUsage;
+  total_cost_usd?: number;
+  usage?: StreamUsage;
 }
 
 export interface StreamUsage {

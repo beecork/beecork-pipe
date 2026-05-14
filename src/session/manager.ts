@@ -201,7 +201,7 @@ export class TabManager {
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number): Promise<SendResult> {
+  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number, forceFresh: boolean = false, retryDepth: number = 0): Promise<SendResult> {
     const db = getDb();
 
     logActivity('task_started', 'Processing message', { tabName: tab.name, details: prompt.slice(0, 500) });
@@ -247,11 +247,12 @@ export class TabManager {
     this.circuitBreakers.set(tab.name, breaker);
     const contextMonitor = new ContextMonitor(tab.name);
 
-    // Resume if: explicitly requested or DB has prior successful responses for this tab
+    // Resume if: explicitly requested or DB has prior successful responses for this tab.
+    // forceFresh overrides both — used after a stale-session retry to guarantee --session-id, not --resume.
     const hasDbHistory = db.prepare(
-      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ?'
-    ).get(tab.id, 'assistant') as { count: number };
-    const shouldResume = resume || hasDbHistory.count > 0;
+      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ? AND content != ?'
+    ).get(tab.id, 'assistant', '') as { count: number };
+    const shouldResume = !forceFresh && (resume || hasDbHistory.count > 0);
 
     return new Promise<SendResult>((resolve, reject) => {
       let resultText = '';
@@ -318,35 +319,51 @@ export class TabManager {
             error: resultEvent?.is_error ?? (code !== 0),
           };
 
-          // Handle resume failure (session expired/not found) — retry with fresh session + context
-          if (result.error && shouldResume && result.text.match(/session (not found|expired|invalid)/i)) {
-            logger.info(`[${tab.name}] Session resume failed, retrying with context injection`);
+          // Handle resume failure (Claude Code session cache rotated / never existed / expired).
+          // Detection covers both legacy text-based errors and the modern error_during_execution
+          // event shape ({"subtype":"error_during_execution","errors":["No conversation found..."]}).
+          // retryDepth guards against any pathological loop.
+          const staleSession = result.error && shouldResume && retryDepth === 0 && (
+            result.text.match(/session (not found|expired|invalid)/i) !== null ||
+            (resultEvent?.subtype === 'error_during_execution' &&
+             resultEvent.errors?.some(e => /no conversation found|session.*not found|session.*expired|session.*invalid/i.test(e)))
+          );
+          if (staleSession) {
+            const detail = resultEvent?.errors?.[0] ?? result.text.split('\n')[0];
+            logger.warn(`[${tab.name}] Resume session ${tab.sessionId} unavailable in Claude Code cache (${detail}). Retrying with fresh session.`);
             const recentMsgs = db.prepare(
-              'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
+              "SELECT role, content FROM messages WHERE tab_id = ? AND content != '' ORDER BY created_at DESC LIMIT 5"
             ).all(tab.id) as Array<{ role: string; content: string }>;
             const context = recentMsgs.reverse().map(m => `${m.role}: ${m.content.slice(0, 200)}`).join('\n');
-            const contextPrompt = `[Previous conversation context:\n${context}\n]\n\n${enrichedPrompt}`;
+            const contextPrompt = context
+              ? `[Previous conversation context:\n${context}\n]\n\n${enrichedPrompt}`
+              : enrichedPrompt;
 
-            // Reset session ID for fresh start
+            // Reset session ID for fresh start. Use --session-id (forceFresh) to bypass the
+            // hasDbHistory shouldResume override that would otherwise --resume the new UUID
+            // against an equally-empty Claude Code cache.
             const newSessionId = uuidv4();
             db.prepare('UPDATE tabs SET session_id = ?, status = ? WHERE id = ?').run(newSessionId, 'idle', tab.id);
 
-            this.executeMessage({ ...tab, sessionId: newSessionId }, contextPrompt, false, onTextChunk)
+            this.executeMessage({ ...tab, sessionId: newSessionId }, contextPrompt, false, onTextChunk, onToolUse, compactionDepth, true, retryDepth + 1)
               .then(resolve).catch(reject);
             return;
           }
 
-          // Store assistant response
-          db.prepare(
-            'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)'
-          ).run(
-            tab.id,
-            'assistant',
-            result.text,
-            result.costUsd,
-            resultEvent?.usage?.input_tokens ?? null,
-            resultEvent?.usage?.output_tokens ?? null,
-          );
+          // Store assistant response. Skip empty content (typically failed/error runs) so
+          // it doesn't trigger the hasDbHistory shouldResume override on future calls.
+          if (result.text.trim() !== '') {
+            db.prepare(
+              'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)'
+            ).run(
+              tab.id,
+              'assistant',
+              result.text,
+              result.costUsd,
+              resultEvent?.usage?.input_tokens ?? null,
+              resultEvent?.usage?.output_tokens ?? null,
+            );
+          }
 
           // Update tab
           db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
