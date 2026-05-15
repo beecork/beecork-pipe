@@ -3,6 +3,7 @@ import type Database from 'better-sqlite3';
 import { ClaudeSubprocess, type SubprocessCallbacks } from './subprocess.js';
 import { CircuitBreaker, type CircuitBreakerAction } from './circuit-breaker.js';
 import { ContextMonitor, type ContextAction } from './context-monitor.js';
+import { TabStore } from './tab-store.js';
 import { getDb } from '../db/index.js';
 import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
@@ -19,32 +20,8 @@ import type {
   StreamContentToolUse,
 } from '../types.js';
 
-// SQLite returns snake_case columns, map to camelCase Tab interface
-interface TabRow {
-  id: string;
-  name: string;
-  session_id: string;
-  status: TabStatus;
-  working_dir: string;
-  created_at: string;
-  last_activity_at: string;
-  pid: number | null;
-  system_prompt: string | null;
-}
-
-function rowToTab(row: TabRow): Tab {
-  return {
-    id: row.id,
-    name: row.name,
-    sessionId: row.session_id,
-    status: row.status,
-    workingDir: row.working_dir,
-    createdAt: row.created_at,
-    lastActivityAt: row.last_activity_at,
-    pid: row.pid,
-    systemPrompt: row.system_prompt,
-  };
-}
+// TabRow + rowToTab moved to ./tab-store.ts — this file now uses TabStore for all
+// pure tab queries and owns only the subprocess lifecycle.
 
 export interface SendResult {
   text: string;
@@ -132,19 +109,16 @@ export class TabManager {
 
   /** Get all tabs from the database */
   listTabs(): Tab[] {
-    const db = getDb();
-    return (db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[]).map(rowToTab);
+    return TabStore.listAll();
   }
 
   /** Get a specific tab */
   getTab(tabName: string): Tab | undefined {
-    const db = getDb();
-    return this.queryTab(db, tabName);
+    return TabStore.findByName(tabName);
   }
 
-  private queryTab(db: Database.Database, tabName: string): Tab | undefined {
-    const row = db.prepare('SELECT * FROM tabs WHERE name = ?').get(tabName) as TabRow | undefined;
-    return row ? rowToTab(row) : undefined;
+  private queryTab(_db: Database.Database, tabName: string): Tab | undefined {
+    return TabStore.findByName(tabName);
   }
 
   /** Stop a tab's running subprocess */
@@ -155,6 +129,17 @@ export class TabManager {
     }
     this.updateTabStatus(tabName, 'stopped');
     this.clearQueue(tabName);
+  }
+
+  /** Update a tab's system_prompt. Returns true if the tab existed. */
+  setSystemPrompt(tabName: string, systemPrompt: string): boolean {
+    return TabStore.setSystemPrompt(tabName, systemPrompt);
+  }
+
+  /** Close a tab — stop subprocess and delete its rows. Returns true if the tab existed. */
+  closeTab(tabName: string): boolean {
+    this.stopTab(tabName);
+    return TabStore.deleteWithMessages(tabName);
   }
 
   /** Stop all running subprocesses (clean shutdown) */
@@ -186,17 +171,24 @@ export class TabManager {
 
     if (pending.length === 0) return;
 
-    for (const msg of pending) {
-      db.prepare('UPDATE pending_messages SET processed = 1 WHERE id = ?').run(msg.id);
+    const markProcessed = db.prepare('UPDATE pending_messages SET processed = 1 WHERE id = ?');
 
+    for (const msg of pending) {
+      // Mark processed AFTER delivery resolves (success OR failure) so a crash
+      // mid-loop doesn't leave the row both unprocessed in the DB and dropped
+      // from the in-memory iteration. Failures still mark processed — we don't
+      // want infinite retries — but the failure path also logs and notifies.
       if (msg.type === 'notification') {
-        // Route notifications to Telegram/WhatsApp via the notify callback
-        this.onNotify?.(msg.message).catch(err => logger.warn('Notify failed:', err));
+        this.onNotify?.(msg.message)
+          .catch(err => logger.warn('Notify failed:', err))
+          .finally(() => markProcessed.run(msg.id));
       } else {
-        // Route regular messages to tabs
-        this.sendMessage(msg.tab_name, msg.message).catch(err => {
-          logger.error(`Failed to process pending message for tab ${msg.tab_name}:`, err);
-        });
+        this.sendMessage(msg.tab_name, msg.message)
+          .catch(err => {
+            logger.error(`Failed to process pending message for tab ${msg.tab_name}:`, err);
+            this.onNotify?.(`Pending message for tab "${msg.tab_name}" failed: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
+          })
+          .finally(() => markProcessed.run(msg.id));
       }
     }
   }
@@ -371,28 +363,30 @@ export class TabManager {
 
           logActivity('task_completed', 'Message processed', { tabName: tab.name, durationMs: result.durationMs, costUsd: result.costUsd, details: result.text.slice(0, 500) });
 
-          // Context window compaction: if checkpoint was triggered, restart with summary
+          // Context window compaction: if checkpoint was triggered, restart with summary.
           const currentDepth = compactionDepth ?? 0;
           if (checkpointTriggered && !result.error && result.text && currentDepth < 2) {
             logger.info(`[${tab.name}] Compacting context (depth ${currentDepth + 1}/2) — requesting summary then restarting session`);
             this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`).catch(err => logger.warn('Notify failed:', err));
-
-            // Ask Claude for a structured summary
-            const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
-            this.sendMessage(tab.name, summaryPrompt, { _compactionDepth: currentDepth + 1 }).then(summaryResult => {
-              // Reset session: new session ID so next message starts fresh with summary context
-              const newSessionId = uuidv4();
-              db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(newSessionId, tab.id);
-              logger.info(`[${tab.name}] Context compacted — new session ${newSessionId.slice(0, 8)}...`);
-
-              // Continue with original goal using the summary as in-prompt context (not persisted)
-              const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
-              this.sendMessage(tab.name, continuationPrompt, { onTextChunk, _compactionDepth: currentDepth + 1 }).then(resolve).catch(reject);
-            }).catch(err => {
-              logger.error(`[${tab.name}] Compaction failed:`, err);
-              resolve(result); // Fall back to returning the original result
-            });
-            return; // Don't resolve yet — compaction flow will resolve
+            // Async/await so any thrown error (from DB or sendMessage) routes through
+            // a single catch instead of the previous nested .then().catch() chain
+            // where a sync throw inside the inner .then could orphan the promise.
+            (async () => {
+              try {
+                const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
+                const summaryResult = await this.sendMessage(tab.name, summaryPrompt, { _compactionDepth: currentDepth + 1 });
+                const newSessionId = uuidv4();
+                db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(newSessionId, tab.id);
+                logger.info(`[${tab.name}] Context compacted — new session ${newSessionId.slice(0, 8)}...`);
+                const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
+                const continuation = await this.sendMessage(tab.name, continuationPrompt, { onTextChunk, _compactionDepth: currentDepth + 1 });
+                resolve(continuation);
+              } catch (err) {
+                logger.error(`[${tab.name}] Compaction failed:`, err);
+                resolve(result); // Fall back to original result so the user gets *something*.
+              }
+            })();
+            return; // Don't resolve here — the async compaction flow resolves.
           }
 
           // Check for delegation completion

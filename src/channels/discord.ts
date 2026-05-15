@@ -1,12 +1,11 @@
 import { logger } from '../util/logger.js';
-import { chunkText, parseTabMessage } from '../util/text.js';
+import { chunkText, formatTabbedResponse, parseTabMessage } from '../util/text.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { saveMedia, isOversized } from '../media/store.js';
-import { initVoiceProviders } from '../voice/index.js';
-import type { STTProvider } from '../voice/stt.js';
-import type { TTSProvider } from '../voice/tts.js';
+import { VoiceState } from './voice-state.js';
 import { processInboundMessage } from './pipeline.js';
+import { isChannelAdmin } from './admin.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 
 export class DiscordChannel implements Channel {
@@ -19,9 +18,7 @@ export class DiscordChannel implements Channel {
   private client: any = null; // Discord.js Client
   private ctx: ChannelContext;
   private allowedUserIds: Set<string>;
-  private sttProvider: STTProvider | null = null;
-  private ttsProvider: TTSProvider | null = null;
-  private sttWarmedUp = false;
+  private voice = new VoiceState('discord');
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -49,10 +46,8 @@ export class DiscordChannel implements Channel {
       ],
     });
 
-    // Voice providers
-    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
-    this.sttProvider = stt;
-    this.ttsProvider = tts;
+    // Voice providers (STT + TTS)
+    this.voice.init(this.ctx.config);
 
     this.client.on(Events.MessageCreate, async (message: any) => {
       // Ignore bot messages
@@ -79,11 +74,9 @@ export class DiscordChannel implements Channel {
         .replace(/<@!?\d+>/g, '') // Remove mentions
         .trim();
 
-      // Warm up STT connection on first message with attachments
-      if (this.sttProvider && !this.sttWarmedUp && message.attachments.size > 0) {
-        this.sttProvider.warmup?.();
-        this.sttWarmedUp = true;
-      }
+      // Warm up STT connection on first message with attachments.
+      // (Discord intentionally only warms up; it doesn't transcribe like Telegram/WhatsApp.)
+      if (message.attachments.size > 0) await this.voice.warmup();
 
       // Download attachments
       const media: MediaAttachment[] = [];
@@ -130,7 +123,7 @@ export class DiscordChannel implements Channel {
           const cmdResult = await handleSharedCommand({
             userId: message.author.id,
             text,
-            isAdmin: this.allowedUserIds.size > 0 && message.author.id === [...this.allowedUserIds][0],
+            isAdmin: isChannelAdmin(this.allowedUserIds, message.author.id, this.ctx.config.discord?.adminUserId),
             channelId: 'discord',
           }, this.ctx.tabManager);
           if (cmdResult.handled) {
@@ -142,11 +135,16 @@ export class DiscordChannel implements Channel {
         // Discord-specific: use thread name as tab if in a thread
         let overrideTabName: string | undefined;
         if (message.channel.isThread?.()) {
-          const threadName = (message.channel.name || '')
+          const sanitized = (message.channel.name || '')
             .replace(/[^a-zA-Z0-9-]/g, '-')
             .replace(/^-+|-+$/g, '')
             .slice(0, 32);
-          if (threadName && tabName === 'default') overrideTabName = threadName;
+          // Run the synthesized name through validateTabName so weird thread
+          // names (empty, starts with hyphen, "default") don't blow up downstream.
+          const { validateTabName } = await import('../config.js');
+          if (sanitized && tabName === 'default' && !validateTabName(sanitized)) {
+            overrideTabName = sanitized;
+          }
         }
 
         // Typing indicator refresh
@@ -162,7 +160,7 @@ export class DiscordChannel implements Channel {
             channelId: 'discord',
             tabManager: this.ctx.tabManager,
             voiceReplyMode: this.ctx.config.voice?.replyMode,
-            ttsProvider: this.ttsProvider,
+            ttsProvider: this.voice.tts,
             userId: message.author.id,
             sendProgress: (msg) => {
               message.channel.send(msg).catch(() => {});
@@ -256,23 +254,18 @@ export class DiscordChannel implements Channel {
   }
 
   private async sendResponse(message: any, text: string, tabName?: string): Promise<void> {
-    const prefix = tabName && tabName !== 'default' ? `[${tabName}] ` : '';
-    const fullText = prefix + text;
-    const chunks = chunkText(fullText, this.maxMessageLength);
-
-    // First chunk as reply, rest as follow-ups
-    if (chunks.length > 0) {
+    // Discord quirk: first chunk uses message.reply so it threads under the
+    // original user message; follow-ups use channel.send. The shared helper
+    // takes a sendChunk callback so each channel keeps its platform-specific
+    // dispatch while sharing chunk + prefix + retry logic.
+    const full = formatTabbedResponse(text, tabName);
+    const chunks = chunkText(full, this.maxMessageLength);
+    for (let i = 0; i < chunks.length; i++) {
+      const isFirst = i === 0;
       await retryWithBackoff(
-        () => message.reply(chunks[0]),
+        () => isFirst ? message.reply(chunks[i]) : message.channel.send(chunks[i]),
         [1000, 5000],
-        'discord-reply',
-      );
-    }
-    for (let i = 1; i < chunks.length; i++) {
-      await retryWithBackoff(
-        () => message.channel.send(chunks[i]),
-        [1000, 5000],
-        'discord-send',
+        isFirst ? 'discord-reply' : 'discord-send',
       );
     }
   }

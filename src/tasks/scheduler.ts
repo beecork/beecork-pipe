@@ -218,30 +218,32 @@ export class TaskScheduler {
   }
 }
 
-/** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to milliseconds */
-export function intervalToMs(interval: string): number | null {
+/** Parse a "1w2d3h45m"-style interval into its parts. Returns null on invalid input. */
+function parseInterval(interval: string): { weeks: number; days: number; hours: number; mins: number } | null {
   const match = interval.match(/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/);
   if (!match || match.slice(1).every(g => g === undefined)) return null;
+  return {
+    weeks: parseInt(match[1] || '0', 10),
+    days: parseInt(match[2] || '0', 10),
+    hours: parseInt(match[3] || '0', 10),
+    mins: parseInt(match[4] || '0', 10),
+  };
+}
 
-  const weeks = parseInt(match[1] || '0', 10);
-  const days = parseInt(match[2] || '0', 10);
-  const hours = parseInt(match[3] || '0', 10);
-  const mins = parseInt(match[4] || '0', 10);
-
+/** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to milliseconds */
+export function intervalToMs(interval: string): number | null {
+  const parts = parseInterval(interval);
+  if (!parts) return null;
+  const { weeks, days, hours, mins } = parts;
   const totalMs = ((weeks * 7 * 24 * 60) + (days * 24 * 60) + (hours * 60) + mins) * 60 * 1000;
   return totalMs > 0 ? totalMs : null;
 }
 
 /** Convert human interval (30m, 2h, 1d, 1h30m, 2w) to cron expression */
 export function intervalToCron(interval: string): string | null {
-  // Try combined format: 1h30m, 2h, 30m, 1d, 2w
-  const match = interval.match(/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/);
-  if (!match || match.slice(1).every(g => g === undefined)) return null;
-
-  const weeks = parseInt(match[1] || '0', 10);
-  const days = parseInt(match[2] || '0', 10);
-  const hours = parseInt(match[3] || '0', 10);
-  const mins = parseInt(match[4] || '0', 10);
+  const parts = parseInterval(interval);
+  if (!parts) return null;
+  const { weeks, days, hours, mins } = parts;
 
   // Convert to total minutes for simple intervals
   const totalMins = weeks * 7 * 24 * 60 + days * 24 * 60 + hours * 60 + mins;
@@ -258,4 +260,36 @@ export function intervalToCron(interval: string): string | null {
 
   // Combined or large intervals -- return null, handled by intervalToMs fallback
   return null;
+}
+
+/**
+ * Validate a schedule string for a given scheduleType. Returns an error string
+ * on invalid input or null when valid. Used by MCP + dashboard before insert
+ * so misconfigured tasks fail loud instead of silently never firing.
+ */
+export function validateSchedule(scheduleType: string, schedule: string): string | null {
+  if (!schedule) return 'schedule is required';
+  switch (scheduleType) {
+    case 'at': {
+      const ts = Date.parse(schedule);
+      if (Number.isNaN(ts)) return `"${schedule}" is not a valid ISO datetime`;
+      return null;
+    }
+    case 'every': {
+      if (intervalToMs(schedule) === null) {
+        return `"${schedule}" is not a valid interval. Use formats like "30m", "2h", "1d", "1h30m".`;
+      }
+      return null;
+    }
+    case 'cron': {
+      try {
+        CronExpressionParser.parse(schedule);
+        return null;
+      } catch (err) {
+        return `"${schedule}" is not a valid cron expression: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+    default:
+      return `unknown scheduleType "${scheduleType}"`;
+  }
 }

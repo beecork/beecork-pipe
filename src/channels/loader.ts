@@ -41,7 +41,6 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
         if (!dir.startsWith(CHANNEL_PREFIX)) continue;
         if (!allowlist.includes(dir)) continue;
 
-        const channelName = dir.slice(CHANNEL_PREFIX.length);
         const pkgPath = path.join(searchPath, dir);
 
         try {

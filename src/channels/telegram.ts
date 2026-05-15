@@ -1,29 +1,27 @@
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chunkText, timeAgo, parseTabMessage } from '../util/text.js';
+import { chunkText, timeAgo, parseTabMessage, formatTabbedResponse } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
-import { getAdminUserId } from '../config.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';
 import { processInboundMessage } from './pipeline.js';
+import { isChannelAdmin } from './admin.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
 import type { GroupConfig } from '../types.js';
-import { initVoiceProviders } from '../voice/index.js';
-import type { STTProvider } from '../voice/stt.js';
-import type { TTSProvider } from '../voice/tts.js';
+import { VoiceState } from './voice-state.js';
 
 const DEFAULT_GROUP_CONFIG: GroupConfig = { activationMode: 'mention', maxResponsesPerMinute: 3, tabPerGroup: true };
 
-/** Format tab status for Telegram display */
-export function formatTabStatus(tabs: Array<{ name: string; status: string; lastActivityAt: string }>): string {
-  if (tabs.length === 0) return 'No tabs.';
-  return tabs.map(t => {
-    const ago = timeAgo(t.lastActivityAt);
-    return `• ${t.name} [${t.status}] — ${ago}`;
-  }).join('\n');
+/**
+ * Strip Telegram bot tokens out of strings before logging. Telegram embeds
+ * the token in the URL path (e.g. https://api.telegram.org/bot1234:abc.../method),
+ * so on fetch errors the message/cause can leak the token to disk.
+ */
+function sanitizeBotToken(text: string): string {
+  return text.replace(/bot\d+:[A-Za-z0-9_-]+/g, 'bot<REDACTED>');
 }
 
 export class TelegramChannel implements Channel {
@@ -36,13 +34,11 @@ export class TelegramChannel implements Channel {
   private bot: TelegramBot;
   private ctx: ChannelContext;
   private activeChatIds: Set<number> = new Set();
-  private sttProvider: STTProvider | null = null;
-  private ttsProvider: TTSProvider | null = null;
+  private voice = new VoiceState('telegram');
   private botUserId: number | null = null;
   private botUsername: string | null = null;
   private mutedGroups = new Set<number>();
   private welcomeSent = new Set<number>();
-  private sttWarmedUp = false;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -65,10 +61,8 @@ export class TelegramChannel implements Channel {
     } catch (err) {
       logger.error('Failed to clear pending updates, starting anyway:', err);
     }
-    // Initialize voice providers
-    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
-    this.sttProvider = stt;
-    this.ttsProvider = tts;
+    // Initialize voice providers (STT + TTS)
+    this.voice.init(this.ctx.config);
 
     this.bot.startPolling();
 
@@ -112,7 +106,17 @@ export class TelegramChannel implements Channel {
       try {
         await this.bot.sendMessage(userId, message);
         this.activeChatIds.add(userId);
-      } catch { /* User hasn't started conversation yet */ }
+      } catch (err) {
+        // Differentiate: 400 "chat not found" means the user has not started a
+        // conversation with the bot yet — silently skip. Anything else (rate
+        // limit, bot blocked, network) is a real delivery failure worth logging.
+        const errAny = err as { response?: { statusCode?: number }; code?: string } & Error;
+        const status = errAny?.response?.statusCode;
+        const isChatNotFound = status === 400 || /chat not found/i.test(errAny?.message || '');
+        if (!isChatNotFound) {
+          logger.warn(`Telegram notify to ${userId} failed (status=${status ?? '?'}):`, sanitizeBotToken(errAny?.message || String(err)));
+        }
+      }
     }
   }
 
@@ -156,9 +160,9 @@ export class TelegramChannel implements Channel {
             'Send any message and I\'ll pass it to Claude Code.',
             '',
             'Quick tips:',
-            '\u2022 `/tab name message` \u2014 organize work into tabs',
-            '\u2022 `/tabs` \u2014 see what\'s running',
-            '\u2022 `/stop name` \u2014 stop a tab',
+            '\u2022 /tab name message \u2014 organize work into tabs',
+            '\u2022 /tabs \u2014 see what\'s running',
+            '\u2022 /stop name \u2014 stop a tab',
             '',
             'Let\'s get started! Send me something.',
           ].join('\n'));
@@ -258,10 +262,7 @@ export class TelegramChannel implements Channel {
         .map(r => r.value!);
 
       // Transcribe voice messages if STT is configured
-      if (this.sttProvider) {
-        const { transcribeVoiceMessages } = await import('../voice/index.js');
-        this.sttWarmedUp = await transcribeVoiceMessages(media, this.sttProvider!, 'telegram', this.sttWarmedUp);
-      }
+      await this.voice.transcribe(media);
 
       // Skip if no text AND no media
       if (!text && media.length === 0) return;
@@ -285,7 +286,10 @@ export class TelegramChannel implements Channel {
         }
       } catch (err) {
         logger.error('Telegram: error handling message:', err);
-        await this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.');
+        // Wrap the fallback send so a Telegram outage doesn't escalate to an
+        // unhandledRejection on the message-event handler.
+        this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.')
+          .catch(sendErr => logger.error('Telegram: failed to send fallback error message:', sendErr));
       }
     });
   }
@@ -303,35 +307,9 @@ export class TelegramChannel implements Channel {
       return;
     }
 
-    if (text === '/history' || text.startsWith('/history ')) {
-      const dateArg = text.slice(9).trim();
-      const { getTimeline, formatTimeline } = await import('../timeline/index.js');
-      let date: string;
-      if (dateArg === 'yesterday') {
-        date = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-      } else if (dateArg) {
-        date = dateArg;
-      } else {
-        date = new Date().toISOString().slice(0, 10);
-      }
-      const events = getTimeline({ date, limit: 30 });
-      await this.sendResponse(chatId, formatTimeline(events));
-      return;
-    }
+    // /history and /knowledge now handled by the shared command handler.
 
-    if (text === '/knowledge') {
-      const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
-      const entries = getAllKnowledge();
-      if (entries.length === 0) {
-        await this.bot.sendMessage(chatId, 'No knowledge stored yet. Beecork learns from your conversations.');
-        return;
-      }
-      const formatted = formatKnowledgeForContext(entries);
-      await this.sendResponse(chatId, formatted.slice(0, 4000));
-      return;
-    }
-
-    // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /register, /link, /users, /cost, /activity, /handoff)
+    // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /cost, /activity, /handoff, /history, /knowledge)
     const { handleSharedCommand } = await import('./command-handler.js');
     const result = await handleSharedCommand({
       userId: String(userId || 'default'),
@@ -420,7 +398,7 @@ export class TelegramChannel implements Channel {
         channelId: 'telegram',
         tabManager: this.ctx.tabManager,
         voiceReplyMode: this.ctx.config.voice?.replyMode,
-        ttsProvider: this.ttsProvider,
+        ttsProvider: this.voice.tts,
         userId: String(chatId),
         sendProgress: (msg) => {
           this.bot.sendMessage(chatId, msg).catch(() => {});
@@ -501,10 +479,10 @@ export class TelegramChannel implements Channel {
   }
 
   private async sendResponse(chatId: number, text: string, tabName?: string): Promise<void> {
-    const prefix = tabName && tabName !== 'default' ? `[${tabName}] ` : '';
-    const fullText = prefix + text;
+    const fullText = formatTabbedResponse(text, tabName);
     const chunks = chunkText(fullText);
 
+    // Telegram-specific: if the response would be >10 chunks, send a preview + the rest as a file.
     if (chunks.length > 10) {
       for (let i = 0; i < 3; i++) {
         await this.sendWithRetry(chatId, chunks[i]);
@@ -524,19 +502,17 @@ export class TelegramChannel implements Channel {
   private async sendWithRetry(chatId: number, text: string): Promise<void> {
     try {
       await retryWithBackoff(
-        async () => {
-          try {
-            await this.bot.sendMessage(chatId, text, { parse_mode: 'Markdown' });
-          } catch {
-            await this.bot.sendMessage(chatId, text);
-          }
-        },
+        // Send as plain text — Telegram's legacy "Markdown" parser silently mangles
+        // underscores/asterisks in Claude's responses (code identifiers, names),
+        // and Beecork has no escaping pass for it.
+        () => this.bot.sendMessage(chatId, text),
         [1000, 5000, 15000],
         'telegram-send',
       );
     } catch (err) {
       const failLog = path.join(getLogsDir(), 'delivery-failures.log');
-      const entry = `[${new Date().toISOString()}] chatId=${chatId} error=${err instanceof Error ? err.message : err} text=${text.slice(0, 200)}\n`;
+      const sanitizedErr = sanitizeBotToken(err instanceof Error ? err.message : String(err));
+      const entry = `[${new Date().toISOString()}] chatId=${chatId} error=${sanitizedErr} text=${text.slice(0, 200)}\n`;
       fs.appendFileSync(failLog, entry);
       logger.error(`Delivery failed after retries for chat ${chatId}`);
     }
@@ -566,8 +542,8 @@ export class TelegramChannel implements Channel {
   }
 
   private isAdmin(userId: number | undefined): boolean {
-    if (!userId) return false;
-    return userId === getAdminUserId();
+    const cfg = this.ctx.config.telegram;
+    return isChannelAdmin(cfg.allowedUserIds, userId, cfg.adminUserId);
   }
 
   private async setReaction(chatId: number, messageId: number, emoji: string): Promise<void> {

@@ -19,11 +19,15 @@ export function getTimeline(options?: { date?: string; tabName?: string; limit?:
   const db = getDb();
   let query = 'SELECT * FROM activity_log';
   const conditions: string[] = [];
-  const params: any[] = [];
+  const params: (string | number)[] = [];
 
   if (options?.date) {
-    conditions.push('date(created_at) = ?');
-    params.push(options.date);
+    // Sargable range so idx_activity_log_created can serve the query.
+    // `date(created_at) = ?` is non-sargable and forces a full scan.
+    const dayStart = `${options.date} 00:00:00`;
+    const dayEnd = `${options.date} 23:59:59.999`;
+    conditions.push('created_at >= ? AND created_at <= ?');
+    params.push(dayStart, dayEnd);
   }
   if (options?.tabName) {
     conditions.push('tab_name = ?');

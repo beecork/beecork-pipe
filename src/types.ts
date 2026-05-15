@@ -11,6 +11,8 @@ export interface ClaudeCodeConfig {
   defaultFlags: string[];
   maxBudgetUsd?: number;
   computerUse?: boolean;
+  /** Hard timeout per subprocess turn. Default 30 min. Set to 0 to disable. */
+  maxRuntimeMs?: number;
 }
 
 export interface MemoryConfig {
@@ -32,6 +34,8 @@ export interface WhatsAppConfig {
   mode: 'baileys';
   sessionPath: string;
   allowedNumbers: string[];
+  /** Optional admin phone number. Defaults to allowedNumbers[0]. */
+  adminNumber?: string;
 }
 
 
@@ -47,6 +51,8 @@ export interface VoiceConfig {
 export interface DiscordConfig {
   token: string;
   allowedUserIds?: string[];
+  /** Optional admin user ID. Defaults to allowedUserIds[0]. */
+  adminUserId?: string;
 }
 
 export interface WebhookConfig {
@@ -81,6 +87,16 @@ export interface MediaGeneratorConfig {
   apiKey?: string;
   model?: string;
   style?: string;
+}
+
+/** A media file attached to a message. Shared by channels + util/text + media. */
+export interface MediaAttachment {
+  type: 'image' | 'audio' | 'video' | 'document' | 'voice';
+  mimeType: string;
+  filePath: string;
+  fileName?: string;
+  duration?: number;
+  caption?: string;
 }
 
 export interface BeecorkConfig {

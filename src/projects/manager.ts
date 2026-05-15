@@ -6,6 +6,19 @@ import { getConfig } from '../config.js';
 import { logger } from '../util/logger.js';
 import type { Project } from './types.js';
 
+interface ProjectRow {
+  id: string;
+  name: string;
+  path: string;
+  type: Project['type'];
+  last_used_at: string;
+  created_at: string;
+}
+
+function rowToProject(r: ProjectRow): Project {
+  return { id: r.id, name: r.name, path: r.path, type: r.type, lastUsedAt: r.last_used_at, createdAt: r.created_at };
+}
+
 /** Get the workspace root from config */
 export function getWorkspaceRoot(): string {
   const config = getConfig();
@@ -74,15 +87,30 @@ export function discoverProjects(scanPaths?: string[]): Project[] {
   return projects;
 }
 
-/** Create a new project */
+/** Create a new project. parentDir must resolve under an allowed root. */
 export function createProject(name: string, parentDir?: string): Project {
-  const parent = parentDir || getWorkspaceRoot();
+  const requestedParent = parentDir || getWorkspaceRoot();
+  const resolvedParent = path.resolve(requestedParent.startsWith('~')
+    ? requestedParent.replace('~', process.env.HOME || '')
+    : requestedParent);
+
+  // Allowlist: parent must resolve under workspace root or one of the configured scan paths.
+  const config = getConfig();
+  const allowedRoots = [
+    getWorkspaceRoot(),
+    ...(config.projectScanPaths ?? []),
+  ].map(r => path.resolve(r.startsWith('~') ? r.replace('~', process.env.HOME || '') : r));
+  const isAllowed = allowedRoots.some(root => resolvedParent === root || resolvedParent.startsWith(root + path.sep));
+  if (!isAllowed) {
+    throw new Error(`Project parent directory must be under workspace root or a configured scan path. Allowed: ${allowedRoots.join(', ')}`);
+  }
+
   // Sanitize name to prevent path traversal
   const safeName = path.basename(name.replace(/\.\./g, ''));
   if (!safeName) throw new Error('Invalid project name');
-  const projectPath = path.resolve(parent, safeName);
+  const projectPath = path.resolve(resolvedParent, safeName);
   // Ensure resolved path is within the parent directory
-  if (!projectPath.startsWith(path.resolve(parent))) {
+  if (!projectPath.startsWith(resolvedParent)) {
     throw new Error('Project path must be within the parent directory');
   }
 
@@ -110,10 +138,8 @@ export function ensureCategory(name: string): Project {
   fs.mkdirSync(categoryPath, { recursive: true });
 
   const db = getDb();
-  const existing = db.prepare('SELECT * FROM projects WHERE name = ? AND type = ?').get(name, 'category') as any;
-  if (existing) {
-    return { id: existing.id, name: existing.name, path: existing.path, type: 'category', lastUsedAt: existing.last_used_at, createdAt: existing.created_at };
-  }
+  const existing = db.prepare('SELECT * FROM projects WHERE name = ? AND type = ?').get(name, 'category') as ProjectRow | undefined;
+  if (existing) return rowToProject(existing);
 
   const id = uuidv4();
   db.prepare('INSERT INTO projects (id, name, path, type) VALUES (?, ?, ?, ?)').run(id, name, categoryPath, 'category');
@@ -123,19 +149,15 @@ export function ensureCategory(name: string): Project {
 /** List all projects */
 export function listProjects(): Project[] {
   const db = getDb();
-  const rows = db.prepare('SELECT * FROM projects ORDER BY type, last_used_at DESC').all() as any[];
-  return rows.map(r => ({
-    id: r.id, name: r.name, path: r.path, type: r.type,
-    lastUsedAt: r.last_used_at, createdAt: r.created_at,
-  }));
+  const rows = db.prepare('SELECT * FROM projects ORDER BY type, last_used_at DESC').all() as ProjectRow[];
+  return rows.map(rowToProject);
 }
 
 /** Get a project by name */
 export function getProject(name: string): Project | null {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM projects WHERE name = ?').get(name) as any;
-  if (!row) return null;
-  return { id: row.id, name: row.name, path: row.path, type: row.type, lastUsedAt: row.last_used_at, createdAt: row.created_at };
+  const row = db.prepare('SELECT * FROM projects WHERE name = ?').get(name) as ProjectRow | undefined;
+  return row ? rowToProject(row) : null;
 }
 
 /** Update last used timestamp */
@@ -143,13 +165,5 @@ export function touchProject(name: string): void {
   getDb().prepare("UPDATE projects SET last_used_at = datetime('now') WHERE name = ?").run(name);
 }
 
-/** Close (permanently delete) a tab */
-export function closeTab(tabName: string): boolean {
-  const db = getDb();
-  const tab = db.prepare('SELECT id FROM tabs WHERE name = ?').get(tabName) as any;
-  if (!tab) return false;
-  db.prepare('DELETE FROM messages WHERE tab_id = ?').run(tab.id);
-  db.prepare('DELETE FROM tabs WHERE id = ?').run(tab.id);
-  logger.info(`Tab permanently closed: ${tabName}`);
-  return true;
-}
+// closeTab moved to TabManager.closeTab — see src/session/manager.ts. It now kills
+// the subprocess and deletes the rows in one place rather than the caller doing both.

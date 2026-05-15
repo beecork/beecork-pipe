@@ -154,8 +154,12 @@ const MIGRATIONS: Migration[] = [
     up: '',
   },
   {
+    // NOTE: this migration is destructive — any user-created project rows from
+    // before v13 are lost. discoverProjects() repopulates the table on next
+    // daemon start, so in practice only manually-created projects are affected.
+    // Future destructive migrations should copy data into the new shape instead.
     version: 13,
-    description: 'Recreate projects table with new schema',
+    description: 'Recreate projects table with new schema (DESTRUCTIVE — see comment)',
     up: `DROP TABLE IF EXISTS projects;
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
@@ -246,6 +250,29 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_memories_tab_name ON memories(tab_name, created_at);
     `,
   },
+  {
+    version: 23,
+    description: 'Index routing_preferences.hit_count for fast WHERE/ORDER BY in routing hot path',
+    up: 'CREATE INDEX IF NOT EXISTS idx_routing_prefs_hits ON routing_preferences(hit_count DESC)',
+  },
+  {
+    version: 24,
+    description: 'Rip out multi-user scaffolding (never enforced; everything was hardcoded user_id="local")',
+    up: `
+      DROP TABLE IF EXISTS identities;
+      DROP TABLE IF EXISTS users;
+      DROP INDEX IF EXISTS idx_cron_jobs_user;
+      ALTER TABLE tabs DROP COLUMN user_id;
+      ALTER TABLE memories DROP COLUMN user_id;
+      ALTER TABLE tasks DROP COLUMN user_id;
+      ALTER TABLE pending_messages DROP COLUMN user_id;
+    `,
+  },
+  {
+    version: 25,
+    description: 'Drop idx_memories_content — leading-wildcard LIKE cannot use a B-tree index',
+    up: 'DROP INDEX IF EXISTS idx_memories_content',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
@@ -282,19 +309,28 @@ export function runMigrations(db: Database.Database): void {
     for (const stmt of statements) {
       try {
         // For ALTER TABLE ADD COLUMN, check if column already exists first
-        const alterMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
-        if (alterMatch) {
-          const columns = db.pragma(`table_info(${alterMatch[1]})`) as Array<{ name: string }>;
-          if (columns.some(c => c.name === alterMatch[2])) {
-            logger.debug(`Migration v${migration.version}: column ${alterMatch[1]}.${alterMatch[2]} already exists, skipping`);
+        const addMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
+        if (addMatch) {
+          const columns = db.pragma(`table_info(${addMatch[1]})`) as Array<{ name: string }>;
+          if (columns.some(c => c.name === addMatch[2])) {
+            logger.debug(`Migration v${migration.version}: column ${addMatch[1]}.${addMatch[2]} already exists, skipping`);
+            continue;
+          }
+        }
+        // For ALTER TABLE DROP COLUMN, skip if column already gone
+        const dropMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+DROP\s+COLUMN\s+(\S+)/i);
+        if (dropMatch) {
+          const columns = db.pragma(`table_info(${dropMatch[1]})`) as Array<{ name: string }>;
+          if (!columns.some(c => c.name === dropMatch[2])) {
+            logger.debug(`Migration v${migration.version}: column ${dropMatch[1]}.${dropMatch[2]} already absent, skipping`);
             continue;
           }
         }
         db.exec(stmt);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('already exists')) {
-          logger.debug(`Migration v${migration.version}: object already exists, skipping statement`);
+        if (msg.includes('already exists') || msg.includes('no such column') || msg.includes('no such table') || msg.includes('no such index')) {
+          logger.debug(`Migration v${migration.version}: object already in target state, skipping statement`);
           continue;
         }
         throw err;

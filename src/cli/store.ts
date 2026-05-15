@@ -1,5 +1,4 @@
 import { execSync } from 'node:child_process';
-import { logger } from '../util/logger.js';
 
 const BEECORK_PREFIXES = ['beecork-capability-', 'beecork-media-', 'beecork-channel-', 'beecork-watcher-'];
 

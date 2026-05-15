@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { getConfig } from './config.js';
 import { getDb, closeDb } from './db/index.js';
+import { TabStore } from './session/tab-store.js';
 import { TabManager } from './session/manager.js';
 import { ChannelRegistry, TelegramChannel, WhatsAppChannel } from './channels/index.js';
 import { TaskScheduler } from './tasks/scheduler.js';
@@ -19,7 +20,7 @@ let channelRegistry: ChannelRegistry;
 let taskScheduler: TaskScheduler;
 let watcherScheduler: WatcherScheduler;
 let pollInterval: ReturnType<typeof setInterval>;
-let shutdownFn: (() => Promise<void>) | null = null;
+let shutdownFn: ((exitCode?: number) => Promise<void>) | null = null;
 const notificationProviders: NotificationProvider[] = [];
 
 /** Broadcast notifications to all active channels and notification providers */
@@ -206,7 +207,10 @@ async function main(): Promise<void> {
   }, 5000);
 
   // 11. Handle shutdown
-  const shutdown = async () => {
+  let shuttingDown = false;
+  const shutdown = async (exitCode = 0) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     logger.info('Beecork daemon shutting down...');
 
     // Send shutdown notification before stopping (with timeout to prevent hanging)
@@ -220,18 +224,18 @@ async function main(): Promise<void> {
     closeDb();
 
     const pidPath = getPidPath();
-    if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
+    try { if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath); } catch { /* race or already gone */ }
     removeRuntimeInfo();
 
     logActivity('system_event', 'Beecork daemon stopped');
     logger.info('Beecork daemon stopped.');
     logger.close();
-    process.exit(0);
+    process.exit(exitCode);
   };
 
   shutdownFn = shutdown;
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => shutdown(0));
+  process.on('SIGINT', () => shutdown(0));
 
   // Resilience: catch unhandled errors to prevent silent daemon death
   process.on('unhandledRejection', (reason) => {
@@ -240,8 +244,8 @@ async function main(): Promise<void> {
   });
   process.on('uncaughtException', async (err) => {
     logger.error('Uncaught exception — shutting down gracefully:', err);
-    if (shutdownFn) await shutdownFn();
-    process.exit(1);
+    // Exit non-zero so the supervisor (launchd/systemd/Task Scheduler) restarts us.
+    await shutdown(1);
   });
 
   logger.info(`Beecork daemon ready (home: ${getBeecorkHome()})`);
@@ -271,18 +275,15 @@ async function main(): Promise<void> {
 async function recoverCrashedTabs(): Promise<void> {
   const db = getDb();
 
-  // Find tabs that were running when daemon stopped (uses snake_case from SQLite)
-  interface TabRow { id: string; name: string; session_id: string; status: string; }
-  const crashedRows = db.prepare(
-    `SELECT * FROM tabs WHERE status = 'running'`
-  ).all() as TabRow[];
+  // Find tabs that were running when daemon stopped
+  const crashedRows = TabStore.findRunning(db);
 
   if (crashedRows.length === 0) return;
 
   logger.info(`Found ${crashedRows.length} tabs that were running when daemon stopped`);
 
   for (const row of crashedRows) {
-    logger.info(`Recovering tab: ${row.name} (session: ${row.session_id})`);
+    logger.info(`Recovering tab: ${row.name} (session: ${row.sessionId})`);
 
     // Get last few messages for context
     const recentMessages = db.prepare(
@@ -303,17 +304,21 @@ async function recoverCrashedTabs(): Promise<void> {
     ].join('\n');
 
     // Reset status so TabManager can use it
-    db.prepare(`UPDATE tabs SET status = 'idle', pid = NULL WHERE id = ?`).run(row.id);
+    TabStore.setIdleById(row.id, db);
 
-    // Resume the session
-    tabManager.sendMessage(row.name, recoveryPrompt, { resume: true }).catch(err => {
+    // Await the resume + notify on outcome. The previous fire-and-forget
+    // pattern told users "recovered" before the resume actually succeeded.
+    try {
+      await tabManager.sendMessage(row.name, recoveryPrompt, { resume: true });
+      await broadcastNotify(
+        `Beecork restarted. Recovered tab "${row.name}" — session resumed.`
+      ).catch(() => {});
+    } catch (err) {
       logger.error(`Failed to recover tab ${row.name}:`, err);
-    });
-
-    // Notify via all channels
-    await broadcastNotify(
-      `Beecork restarted. Recovered tab "${row.name}" — session resumed.`
-    ).catch(() => {});
+      await broadcastNotify(
+        `Beecork restarted. Tab "${row.name}" recovery FAILED — ${err instanceof Error ? err.message : String(err)}.`
+      ).catch(() => {});
+    }
   }
 }
 

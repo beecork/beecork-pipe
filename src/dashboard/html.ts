@@ -314,8 +314,10 @@ export function getDashboardHtml(token: string): string {
         dot.className = 'status-dot status-error';
         status.textContent = 'stopped';
       }
+      // Server returns both new "tasks" and legacy "cronJobs" — prefer the new one.
+      const taskCount = s.tasks ?? s.cronJobs ?? 0;
       document.getElementById('stats').textContent =
-        s.tabs + ' tabs | ' + s.cronJobs + ' crons | ' + s.memories + ' mem';
+        s.tabs + ' tabs | ' + taskCount + ' tasks | ' + s.memories + ' mem';
     } catch {}
   }
 
@@ -349,7 +351,8 @@ export function getDashboardHtml(token: string): string {
     }).join('');
   }
 
-  async function selectTab(name) {
+  async function selectTab(name, opts) {
+    const fromUser = !opts || opts.fromUser !== false;
     selectedTab = name;
     document.getElementById('msg-title').textContent = name;
     document.getElementById('btn-delete-tab').classList.remove('hidden');
@@ -382,19 +385,28 @@ export function getDashboardHtml(token: string): string {
       if (m.tokens_in) meta.push(m.tokens_in.toLocaleString() + ' in');
       if (m.tokens_out) meta.push(m.tokens_out.toLocaleString() + ' out');
       const metaStr = meta.length ? '<span class="text-xs text-gray-600 ml-2">' + meta.join(' | ') + '</span>' : '';
-      const content = m.content.length > 2000 ? m.content.slice(0, 2000) + '\\n\\n... (' + m.content.length.toLocaleString() + ' chars total)' : m.content;
+      const truncated = m.content.length > 2000;
+      const preview = truncated ? m.content.slice(0, 2000) : m.content;
+      const rest = truncated ? m.content.slice(2000) : '';
+      const body = truncated
+        ? esc(preview) + '<details class="mt-1"><summary class="text-xs text-honey-400 cursor-pointer">Show ' + (m.content.length - 2000).toLocaleString() + ' more chars</summary>' + esc(rest) + '</details>'
+        : esc(preview);
 
       return '<div class="' + cls + ' rounded-lg p-3">' +
         '<div class="flex items-center justify-between mb-1">' +
           '<span class="text-xs font-semibold ' + (m.role === 'user' ? 'text-honey-400' : 'text-gray-400') + '">' + label + metaStr + '</span>' +
           '<span class="text-xs text-gray-600">' + timeAgo(m.created_at) + '</span>' +
         '</div>' +
-        '<pre class="text-sm text-gray-300 whitespace-pre-wrap break-words font-sans leading-relaxed">' + esc(content) + '</pre>' +
+        '<pre class="text-sm text-gray-300 whitespace-pre-wrap break-words font-sans leading-relaxed">' + body + '</pre>' +
       '</div>';
     }).join('');
 
-    list.scrollTop = list.scrollHeight;
-    document.getElementById('msg-input').focus();
+    // Only jump to bottom + steal focus on user-initiated selection,
+    // not on the 8s background refresh, so typing isn't interrupted.
+    if (fromUser) {
+      list.scrollTop = list.scrollHeight;
+      document.getElementById('msg-input').focus();
+    }
   }
 
   // --- Send message ---
@@ -683,7 +695,7 @@ export function getDashboardHtml(token: string): string {
           const day = c.day.slice(5);
           return '<div class="flex-1 flex flex-col items-center gap-1">' +
             '<span class="text-xs text-gray-500 font-mono">$' + c.total_cost.toFixed(3) + '</span>' +
-            '<div class="w-full cost-bar" style="height:' + Math.max(pct, 2) + '%" title="' + c.day + ': $' + c.total_cost.toFixed(4) + ' (' + c.message_count + ' msgs)"></div>' +
+            '<div class="w-full cost-bar" style="height:' + Math.max(pct, 2) + '%" title="' + esc(c.day) + ': $' + c.total_cost.toFixed(4) + ' (' + c.message_count + ' msgs)"></div>' +
             '<span class="text-xs text-gray-600 font-mono">' + day + '</span>' +
           '</div>';
         }).join('') +
@@ -762,7 +774,7 @@ export function getDashboardHtml(token: string): string {
   loadTabs();
   setInterval(loadStatus, 10000);
   // Periodically reload messages for selected tab
-  setInterval(() => { if (selectedTab) selectTab(selectedTab); }, 8000);
+  setInterval(() => { if (selectedTab) selectTab(selectedTab, { fromUser: false }); }, 8000);
 </script>
 </body>
 </html>`;

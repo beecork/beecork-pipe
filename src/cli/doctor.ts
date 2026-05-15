@@ -136,9 +136,12 @@ export async function runDoctor(): Promise<void> {
     checks.push({ name: 'MCP config', status: 'pass', message: 'Default (beecork MCP only)' });
   }
 
-  // Print results
+  // Print results — gate ANSI on a real TTY so piping to a file/grep yields plain text.
   console.log('\nBeecork Doctor\n');
-  const icons = { pass: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m!\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
+  const colored = process.stdout.isTTY && !process.env.NO_COLOR;
+  const icons = colored
+    ? { pass: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m!\x1b[0m', fail: '\x1b[31m✗\x1b[0m' }
+    : { pass: '✓', warn: '!', fail: '✗' };
   for (const check of checks) {
     console.log(`  ${icons[check.status]} ${check.name}: ${check.message}`);
   }

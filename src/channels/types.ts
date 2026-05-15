@@ -1,15 +1,7 @@
 import type { TabManager } from '../session/manager.js';
-import type { BeecorkConfig } from '../types.js';
+import type { BeecorkConfig, MediaAttachment } from '../types.js';
 
-/** A media file attached to a message */
-export interface MediaAttachment {
-  type: 'image' | 'audio' | 'video' | 'document' | 'voice';
-  mimeType: string;
-  filePath: string;
-  fileName?: string;
-  duration?: number;
-  caption?: string;
-}
+export type { MediaAttachment };
 
 /** An inbound message from any channel */
 export interface InboundMessage {

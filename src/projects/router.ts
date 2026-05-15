@@ -1,5 +1,4 @@
 import { getDb } from '../db/index.js';
-import { logger } from '../util/logger.js';
 import { listProjects, getProject, ensureCategory, touchProject } from './manager.js';
 import type { Project, RouteDecision, RoutingContext } from './types.js';
 
@@ -214,4 +213,46 @@ function checkLearnedRouting(message: string): { projectName: string; confidence
   }
 
   return null;
+}
+
+export interface RouteResult {
+  effectiveTabName: string;
+  projectPath?: string;
+  confirmationMessage?: string;
+}
+
+/**
+ * Shared project routing logic — resolves which tab/project to use for a message.
+ * Pulled out of channels/ so all routing decisions live in one place.
+ */
+export async function resolveProjectRoute(
+  rawPrompt: string,
+  tabName: string,
+  text: string,
+  userId: string,
+): Promise<RouteResult> {
+  if (tabName !== 'default' || text.startsWith('/tab ')) {
+    return { effectiveTabName: tabName };
+  }
+
+  try {
+    const decision = routeMessage(rawPrompt, { userId });
+
+    if (decision.needsConfirmation) {
+      const projects = listProjects().filter((p): p is Project => p.type === 'user-project');
+      const options = projects.map((p, i: number) => `${i + 1}) ${p.name}`).join('\n');
+      return {
+        effectiveTabName: tabName,
+        confirmationMessage: `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`,
+      };
+    }
+
+    setUserContext(userId, decision.project.name, decision.tabName);
+    return {
+      effectiveTabName: decision.tabName,
+      projectPath: decision.project.path,
+    };
+  } catch {
+    return { effectiveTabName: tabName };
+  }
 }

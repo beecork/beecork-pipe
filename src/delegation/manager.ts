@@ -5,6 +5,19 @@ import { logger } from '../util/logger.js';
 const MAX_DELEGATION_DEPTH = 3;
 const MAX_PENDING_PER_TAB = 5;
 
+interface DelegationRow {
+  id: string;
+  source_tab: string;
+  target_tab: string;
+  message: string;
+  return_to_tab: string | null;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  result: string | null;
+  depth: number;
+  created_at: string;
+  completed_at: string | null;
+}
+
 export interface Delegation {
   id: string;
   sourceTab: string;
@@ -65,7 +78,7 @@ export function completeDelegation(targetTab: string, result: string): Delegatio
   // Find the most recent pending/running delegation to this tab
   const row = db.prepare(
     "SELECT * FROM delegations WHERE target_tab = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1"
-  ).get(targetTab) as any;
+  ).get(targetTab) as DelegationRow | undefined;
 
   if (!row) return null;
 
@@ -96,7 +109,7 @@ export function getPendingDelegations(tabName?: string): Delegation[] {
     ? "SELECT * FROM delegations WHERE source_tab = ? AND status IN ('pending', 'running') ORDER BY created_at"
     : "SELECT * FROM delegations WHERE status IN ('pending', 'running') ORDER BY created_at";
   const rows = tabName ? db.prepare(query).all(tabName) : db.prepare(query).all();
-  return (rows as any[]).map(r => ({
+  return (rows as DelegationRow[]).map(r => ({
     id: r.id,
     sourceTab: r.source_tab,
     targetTab: r.target_tab,

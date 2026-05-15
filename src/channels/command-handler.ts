@@ -34,11 +34,9 @@ export interface CommandResult {
   response?: string;
 }
 
-export interface RouteResult {
-  effectiveTabName: string;
-  projectPath?: string;
-  confirmationMessage?: string;
-}
+// RouteResult and resolveProjectRoute moved to src/projects/router.ts (re-exported
+// via src/projects/index.ts) so all routing logic lives in one module.
+export type { RouteResult } from '../projects/router.js';
 
 /**
  * Handle shared commands that work identically across all channels.
@@ -72,12 +70,20 @@ export async function handleSharedCommand(
     const rest = text.slice(5);
     const setPromptMatch = rest.match(/^(\S+)\s+--set-prompt\s+"([^"]+)"/);
     if (setPromptMatch) {
+      if (!isAdmin) return { handled: true, response: 'Only admin can change system prompts.' };
       const tabName = setPromptMatch[1];
+      if (tabName !== 'default') {
+        const nameErr = validateTabName(tabName);
+        if (nameErr) return { handled: true, response: `Invalid tab name: ${nameErr}` };
+      }
       const systemPrompt = setPromptMatch[2];
-      const { getDb } = await import('../db/index.js');
-      const db = getDb();
-      db.prepare('UPDATE tabs SET system_prompt = ? WHERE name = ?').run(systemPrompt, tabName);
-      return { handled: true, response: `System prompt updated for tab "${tabName}"` };
+      const updated = tabManager.setSystemPrompt(tabName, systemPrompt);
+      return {
+        handled: true,
+        response: updated
+          ? `System prompt updated for tab "${tabName}"`
+          : `Tab "${tabName}" not found.`,
+      };
     }
 
     const spaceIdx = rest.indexOf(' ');
@@ -93,41 +99,9 @@ export async function handleSharedCommand(
     return { handled: false };
   }
 
-  // /register [name]
-  if (text === '/register' || text.startsWith('/register ')) {
-    const { resolveUser, registerUser, hasAdmin } = await import('../users/index.js');
-    const existing = resolveUser(ctx.channelId, userId);
-    if (existing) {
-      return { handled: true, response: `You're already registered as "${existing.name}" (${existing.role}).` };
-    }
-    const name = text.slice(10).trim() || `user-${userId}`;
-    const role = hasAdmin() ? 'user' : 'admin';
-    const user = registerUser(name, ctx.channelId, userId, role);
-    return { handled: true, response: `Registered as "${user.name}" (${user.role}).${role === 'admin' ? ' You are the admin.' : ''}` };
-  }
-
-  // /link channel:peerId
-  if (text.startsWith('/link ')) {
-    const { resolveUser, linkIdentity } = await import('../users/index.js');
-    const user = resolveUser(ctx.channelId, userId);
-    if (!user) return { handled: true, response: 'Register first: /register' };
-    const parts = text.slice(6).trim().split(':');
-    if (parts.length !== 2) {
-      return { handled: true, response: 'Usage: /link channel:peerId (e.g., /link discord:123456789)' };
-    }
-    const success = linkIdentity(user.id, parts[0], parts[1]);
-    return { handled: true, response: success ? `Linked ${parts[0]} identity.` : 'Failed to link — already linked or invalid.' };
-  }
-
-  // /users (admin only)
-  if (text === '/users') {
-    if (!isAdmin) return { handled: true, response: 'Admin only.' };
-    const { listUsers } = await import('../users/index.js');
-    const users = listUsers();
-    if (users.length === 0) return { handled: true, response: 'No registered users.' };
-    const list = users.map(u => `• ${u.name} [${u.role}] — ${u.id.slice(0, 8)}`).join('\n');
-    return { handled: true, response: `${users.length} user(s):\n${list}` };
-  }
+  // /register, /link, /users were part of unused multi-user scaffolding —
+  // removed in the audit fix pass. Beecork is single-user; admin is the first
+  // allowedUserId on Telegram (or config.telegram.adminUserId).
 
   // /watches
   if (text === '/watches' || text.startsWith('/watches@')) {
@@ -146,7 +120,7 @@ export async function handleSharedCommand(
   if (text === '/tasks' || text.startsWith('/tasks@')) {
     const { getDb } = await import('../db/index.js');
     const db = getDb();
-    const tasks = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as TaskRow[];
+    const tasks = db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[];
     if (tasks.length === 0) return { handled: true, response: 'No tasks scheduled.' };
     const taskList = tasks.map((t) => {
       const status = t.enabled ? 'enabled' : 'disabled';
@@ -221,10 +195,7 @@ export async function handleSharedCommand(
   if (text.startsWith('/close ')) {
     const tabNameToClose = text.slice(7).trim();
     if (!tabNameToClose) return { handled: true, response: 'Usage: /close <tabname>' };
-    // Stop any running subprocess before deleting records
-    tabManager.stopTab(tabNameToClose);
-    const { closeTab } = await import('../projects/index.js');
-    const closed = closeTab(tabNameToClose);
+    const closed = tabManager.closeTab(tabNameToClose);
     return { handled: true, response: closed ? `Tab "${tabNameToClose}" permanently closed. History deleted.` : `Tab "${tabNameToClose}" not found.` };
   }
 
@@ -239,42 +210,35 @@ export async function handleSharedCommand(
     return { handled: true, response: `Fresh start in "${folderName}" (tab: ${freshTabName})\nSend your message now.` };
   }
 
+  // /history [date|yesterday]
+  if (text === '/history' || text.startsWith('/history ')) {
+    const dateArg = text.slice(9).trim();
+    const { getTimeline, formatTimeline } = await import('../timeline/index.js');
+    let date: string;
+    if (dateArg === 'yesterday') {
+      date = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    } else if (dateArg) {
+      date = dateArg;
+    } else {
+      date = new Date().toISOString().slice(0, 10);
+    }
+    const events = getTimeline({ date, limit: 30 });
+    return { handled: true, response: formatTimeline(events) };
+  }
+
+  // /knowledge
+  if (text === '/knowledge') {
+    const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
+    const entries = getAllKnowledge();
+    if (entries.length === 0) {
+      return { handled: true, response: 'No knowledge stored yet. Beecork learns from your conversations.' };
+    }
+    return { handled: true, response: formatKnowledgeForContext(entries).slice(0, 4000) };
+  }
+
   return { handled: false };
 }
 
-/**
- * Shared project routing logic — resolves which tab/project to use for a message.
- * Extracted from the identical blocks in Telegram, WhatsApp, and Discord channels.
- */
-export async function resolveProjectRoute(
-  rawPrompt: string,
-  tabName: string,
-  text: string,
-  userId: string,
-): Promise<RouteResult> {
-  if (tabName !== 'default' || text.startsWith('/tab ')) {
-    return { effectiveTabName: tabName };
-  }
-
-  try {
-    const { routeMessage, setUserContext, listProjects } = await import('../projects/index.js');
-    const decision = routeMessage(rawPrompt, { userId });
-
-    if (decision.needsConfirmation) {
-      const projects = listProjects().filter((p): p is Project => p.type === 'user-project');
-      const options = projects.map((p, i: number) => `${i + 1}) ${p.name}`).join('\n');
-      return {
-        effectiveTabName: tabName,
-        confirmationMessage: `Which project?\n${options}\n\nReply with the number, or just send your message with /project <name> first.`,
-      };
-    }
-
-    setUserContext(userId, decision.project.name, decision.tabName);
-    return {
-      effectiveTabName: decision.tabName,
-      projectPath: decision.project.path,
-    };
-  } catch {
-    return { effectiveTabName: tabName };
-  }
-}
+// resolveProjectRoute lives at src/projects/router.ts — re-exported here so
+// existing callers (channels/pipeline.ts) don't need to update their import path.
+export { resolveProjectRoute } from '../projects/router.js';

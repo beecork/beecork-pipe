@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import Database from 'better-sqlite3';
-import { getDbPath, ensureBeecorkDirs } from '../util/paths.js';
+import { getDbPath, ensureBeecorkDirs, expandHome } from '../util/paths.js';
 import { runMigrations } from './migrations.js';
 import { logger } from '../util/logger.js';
 
@@ -70,6 +72,9 @@ export function getDb(): Database.Database {
       // Prune old permission history (keep last 1000 entries)
       db?.exec('DELETE FROM permission_history WHERE created_at < (SELECT created_at FROM permission_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
       db?.exec("DELETE FROM activity_log WHERE created_at < datetime('now', '-90 days')");
+      // Prune unused routing patterns so the per-message learned-routing scan
+      // doesn't grow unbounded. Keep patterns that have been hit recently or often.
+      db?.exec("DELETE FROM routing_preferences WHERE hit_count < 3 AND created_at < datetime('now', '-30 days')");
     } catch (err) {
       logger.warn('WAL checkpoint/cleanup error:', err);
     }
@@ -89,8 +94,18 @@ export function createTabRecord(db: Database.Database, opts: CreateTabOptions): 
   const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(opts.name) as { name: string } | undefined;
   if (existing) return { id: '', name: opts.name, created: false };
 
+  // Resolve and validate workingDir. Done here so every caller (CLI, dashboard, MCP)
+  // gets the same checks instead of each rolling its own.
+  let dir = opts.workingDir || process.env.HOME || '/';
+  dir = path.resolve(expandHome(dir));
+  if (!fs.existsSync(dir)) {
+    throw new Error(`workingDir does not exist: ${dir}`);
+  }
+  if (!fs.statSync(dir).isDirectory()) {
+    throw new Error(`workingDir is not a directory: ${dir}`);
+  }
+
   const id = crypto.randomUUID();
-  const dir = opts.workingDir || process.env.HOME || '/';
   db.prepare(
     'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, opts.name, crypto.randomUUID(), 'idle', dir, opts.systemPrompt || null);

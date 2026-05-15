@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { validateTabName, getTabConfig, resolveWorkingDir, getAdminUserId } from '../../src/config.js';
+import { validateTabName, getTabConfig, resolveWorkingDir } from '../../src/config.js';
+import { isChannelAdmin } from '../../src/channels/admin.js';
 
 // Mock fs and paths so getConfig doesn't hit the real filesystem
 vi.mock('node:fs', () => ({
@@ -74,11 +75,21 @@ describe('Config', () => {
     });
   });
 
-  describe('getAdminUserId', () => {
-    it('should return first allowedUserId when no adminUserId set', () => {
-      // With default config (no file), allowedUserIds is [] so returns undefined
-      const id = getAdminUserId();
-      expect(id).toBeUndefined();
+  describe('isChannelAdmin', () => {
+    it('returns false when allowlist is empty', () => {
+      expect(isChannelAdmin([], 'user-1')).toBe(false);
+    });
+    it('returns true for the first allowed peer when no explicit admin', () => {
+      expect(isChannelAdmin(['alice', 'bob'], 'alice')).toBe(true);
+      expect(isChannelAdmin(['alice', 'bob'], 'bob')).toBe(false);
+    });
+    it('respects an explicit admin override', () => {
+      expect(isChannelAdmin(['alice', 'bob'], 'bob', 'bob')).toBe(true);
+      expect(isChannelAdmin(['alice', 'bob'], 'alice', 'bob')).toBe(false);
+    });
+    it('compares as strings (handles number IDs)', () => {
+      expect(isChannelAdmin([123, 456], 123)).toBe(true);
+      expect(isChannelAdmin([123, 456], '123')).toBe(true);
     });
   });
 });

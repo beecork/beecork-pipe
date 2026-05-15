@@ -1,14 +1,12 @@
 import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { saveMedia, isOversized } from '../media/store.js';
-import { retryWithBackoff } from '../util/retry.js';
-import { chunkText } from '../util/text.js';
+import { sendChunkedResponse } from './send-helpers.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { processInboundMessage } from './pipeline.js';
+import { isChannelAdmin } from './admin.js';
 import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
-import { initVoiceProviders } from '../voice/index.js';
-import type { STTProvider } from '../voice/stt.js';
-import type { TTSProvider } from '../voice/tts.js';
+import { VoiceState } from './voice-state.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
 
@@ -25,9 +23,7 @@ export class WhatsAppChannel implements Channel {
   private reconnectAttempts = 0;
   private readonly maxReconnectAttempts = 10;
   private readonly backoffDelays = [1000, 5000, 15000, 30000, 60000];
-  private sttProvider: STTProvider | null = null;
-  private ttsProvider: TTSProvider | null = null;
-  private sttWarmedUp = false;
+  private voice = new VoiceState('whatsapp');
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -35,10 +31,8 @@ export class WhatsAppChannel implements Channel {
   }
 
   async start(): Promise<void> {
-    // Initialize voice providers
-    const { stt, tts } = initVoiceProviders(this.ctx.config.voice);
-    this.sttProvider = stt;
-    this.ttsProvider = tts;
+    // Initialize voice providers (STT + TTS)
+    this.voice.init(this.ctx.config);
 
     try {
       const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
@@ -115,63 +109,65 @@ export class WhatsAppChannel implements Channel {
           msg.message.imageMessage?.caption ||
           msg.message.videoMessage?.caption || '';
 
-        // Download media (in parallel)
+        // Download media (in parallel). Descriptor map collapses what used to be
+        // 5 near-identical blocks into one loop. Each descriptor describes how to
+        // extract a MediaAttachment from a specific Baileys variant.
+        type WAMessage = Record<string, any>;
+        interface WADescriptor {
+          key: string;
+          build: (m: WAMessage, buf: Buffer) => MediaAttachment | null;
+        }
+        const descriptors: WADescriptor[] = [
+          {
+            key: 'imageMessage',
+            build: (m, buf) => ({
+              type: 'image',
+              mimeType: m.imageMessage.mimetype || 'image/jpeg',
+              filePath: saveMedia(buf, 'jpg'),
+            }),
+          },
+          {
+            key: 'audioMessage',
+            build: (m, buf) => {
+              const ext = m.audioMessage.ptt ? 'ogg' : 'mp3';
+              return {
+                type: m.audioMessage.ptt ? 'voice' : 'audio',
+                mimeType: m.audioMessage.mimetype || 'audio/ogg',
+                filePath: saveMedia(buf, ext),
+                duration: m.audioMessage.seconds ?? undefined,
+              };
+            },
+          },
+          {
+            key: 'documentMessage',
+            build: (m, buf) => {
+              const ext = m.documentMessage.fileName?.split('.').pop() || 'bin';
+              return {
+                type: 'document',
+                mimeType: m.documentMessage.mimetype || 'application/octet-stream',
+                filePath: saveMedia(buf, ext, m.documentMessage.fileName ?? undefined),
+                fileName: m.documentMessage.fileName ?? undefined,
+              };
+            },
+          },
+          {
+            key: 'videoMessage',
+            build: (m, buf) => ({
+              type: 'video',
+              mimeType: m.videoMessage.mimetype || 'video/mp4',
+              filePath: saveMedia(buf, 'mp4'),
+              duration: m.videoMessage.seconds ?? undefined,
+            }),
+          },
+        ];
         const waDownloadTasks: Array<Promise<MediaAttachment | null>> = [];
-        if (msg.message.imageMessage) {
+        for (const d of descriptors) {
+          if (!msg.message[d.key]) continue;
           waDownloadTasks.push(
             downloadMediaMessage(msg, 'buffer', {})
               .then((buffer: any) => {
-                if (buffer && !isOversized(buffer.length)) {
-                  const filePath = saveMedia(buffer as Buffer, 'jpg');
-                  return { type: 'image' as const, mimeType: msg.message.imageMessage.mimetype || 'image/jpeg', filePath };
-                }
-                return null;
-              })
-              .catch(() => null)
-          );
-        }
-        if (msg.message.audioMessage) {
-          waDownloadTasks.push(
-            downloadMediaMessage(msg, 'buffer', {})
-              .then((buffer: any) => {
-                if (buffer && !isOversized(buffer.length)) {
-                  const ext = msg.message.audioMessage.ptt ? 'ogg' : 'mp3';
-                  const filePath = saveMedia(buffer as Buffer, ext);
-                  return {
-                    type: (msg.message.audioMessage.ptt ? 'voice' : 'audio') as 'voice' | 'audio',
-                    mimeType: msg.message.audioMessage.mimetype || 'audio/ogg',
-                    filePath,
-                    duration: msg.message.audioMessage.seconds ?? undefined,
-                  };
-                }
-                return null;
-              })
-              .catch(() => null)
-          );
-        }
-        if (msg.message.documentMessage) {
-          waDownloadTasks.push(
-            downloadMediaMessage(msg, 'buffer', {})
-              .then((buffer: any) => {
-                if (buffer && !isOversized(buffer.length)) {
-                  const ext = msg.message.documentMessage.fileName?.split('.').pop() || 'bin';
-                  const filePath = saveMedia(buffer as Buffer, ext, msg.message.documentMessage.fileName ?? undefined);
-                  return { type: 'document' as const, mimeType: msg.message.documentMessage.mimetype || 'application/octet-stream', filePath, fileName: msg.message.documentMessage.fileName ?? undefined };
-                }
-                return null;
-              })
-              .catch(() => null)
-          );
-        }
-        if (msg.message.videoMessage) {
-          waDownloadTasks.push(
-            downloadMediaMessage(msg, 'buffer', {})
-              .then((buffer: any) => {
-                if (buffer && !isOversized(buffer.length)) {
-                  const filePath = saveMedia(buffer as Buffer, 'mp4');
-                  return { type: 'video' as const, mimeType: msg.message.videoMessage.mimetype || 'video/mp4', filePath, duration: msg.message.videoMessage.seconds ?? undefined };
-                }
-                return null;
+                if (!buffer || isOversized(buffer.length)) return null;
+                try { return d.build(msg.message, buffer as Buffer); } catch { return null; }
               })
               .catch(() => null)
           );
@@ -182,10 +178,7 @@ export class WhatsAppChannel implements Channel {
           .map(r => r.value!);
 
         // Transcribe voice messages if STT is configured
-        if (this.sttProvider) {
-          const { transcribeVoiceMessages } = await import('../voice/index.js');
-          this.sttWarmedUp = await transcribeVoiceMessages(media, this.sttProvider!, 'whatsapp', this.sttWarmedUp);
-        }
+        await this.voice.transcribe(media);
 
         if (!text && media.length === 0) return;
 
@@ -198,7 +191,7 @@ export class WhatsAppChannel implements Channel {
             const cmdResult = await handleSharedCommand({
               userId: waUserId,
               text,
-              isAdmin: this.allowedNumbers.size > 0 && waUserId === [...this.allowedNumbers][0],
+              isAdmin: isChannelAdmin(this.allowedNumbers, waUserId, this.ctx.config.whatsapp?.adminNumber),
               channelId: 'whatsapp',
             }, this.ctx.tabManager);
             if (cmdResult.handled) {
@@ -216,7 +209,7 @@ export class WhatsAppChannel implements Channel {
             channelId: 'whatsapp',
             tabManager: this.ctx.tabManager,
             voiceReplyMode: this.ctx.config.voice?.replyMode,
-            ttsProvider: this.ttsProvider,
+            ttsProvider: this.voice.tts,
             userId: waUserId,
             sendProgress: (msg) => {
               sock.sendMessage(sender, { text: msg }).catch(() => {});
@@ -237,7 +230,8 @@ export class WhatsAppChannel implements Channel {
           await this.sendResponse(sender, pipelineResult.responseText, pipelineResult.tabName);
         } catch (err) {
           logger.error('WhatsApp message handler error:', err);
-          await sock.sendMessage(sender, { text: 'Something went wrong processing your message. Check daemon logs for details.' }).catch(() => {});
+          await sock.sendMessage(sender, { text: 'Something went wrong processing your message. Check daemon logs for details.' })
+            .catch((sendErr: unknown) => logger.error('WhatsApp: failed to send fallback error message:', sendErr));
         }
       });
     } catch (err) {
@@ -258,14 +252,12 @@ export class WhatsAppChannel implements Channel {
   async sendMessage(peerId: string, text: string, _options?: SendOptions): Promise<void> {
     const sock = this.sock as any;
     if (!sock) return;
-    const chunks = chunkText(text, WHATSAPP_MAX_LENGTH);
-    for (const chunk of chunks) {
-      await retryWithBackoff(
-        () => sock.sendMessage(peerId, { text: chunk }),
-        [1000, 5000, 15000],
-        'whatsapp-send',
-      );
-    }
+    await sendChunkedResponse({
+      text,
+      maxLength: WHATSAPP_MAX_LENGTH,
+      retryLabel: 'whatsapp-send',
+      sendChunk: chunk => sock.sendMessage(peerId, { text: chunk }),
+    });
   }
 
   async sendNotification(message: string, _urgent?: boolean): Promise<void> {
@@ -294,19 +286,17 @@ export class WhatsAppChannel implements Channel {
   // ─── Private ───
 
   private async sendResponse(jid: string, text: string, tabName?: string): Promise<void> {
-    const prefix = tabName && tabName !== 'default' ? `[${tabName}] ` : '';
-    const chunks = chunkText(prefix + text, WHATSAPP_MAX_LENGTH);
     const sock = this.sock as any;
-    for (const chunk of chunks) {
-      try {
-        await retryWithBackoff(
-          () => sock.sendMessage(jid, { text: chunk }),
-          [1000, 5000, 15000],
-          'whatsapp-send',
-        );
-      } catch (err) {
-        logger.error(`WhatsApp delivery failed for ${jid}:`, err);
-      }
+    try {
+      await sendChunkedResponse({
+        text,
+        tabName,
+        maxLength: WHATSAPP_MAX_LENGTH,
+        retryLabel: 'whatsapp-send',
+        sendChunk: chunk => sock.sendMessage(jid, { text: chunk }),
+      });
+    } catch (err) {
+      logger.error(`WhatsApp delivery failed for ${jid}:`, err);
     }
   }
 

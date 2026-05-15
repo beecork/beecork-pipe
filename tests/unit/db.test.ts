@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import os from 'node:os';
 import Database from 'better-sqlite3';
 import { createTabRecord } from '../../src/db/index.js';
+
+// Real on-disk path for tests — createTabRecord validates existence + isDirectory.
+const TMPDIR = os.tmpdir();
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tabs (
@@ -29,7 +33,7 @@ describe('createTabRecord', () => {
   });
 
   it('should create a new tab with correct fields', () => {
-    const result = createTabRecord(db, { name: 'research', workingDir: '/projects/ai' });
+    const result = createTabRecord(db, { name: 'research', workingDir: TMPDIR });
 
     expect(result.created).toBe(true);
     expect(result.name).toBe('research');
@@ -37,7 +41,7 @@ describe('createTabRecord', () => {
 
     const row = db.prepare('SELECT * FROM tabs WHERE name = ?').get('research') as any;
     expect(row.name).toBe('research');
-    expect(row.working_dir).toBe('/projects/ai');
+    expect(row.working_dir).toBe(TMPDIR);
     expect(row.status).toBe('idle');
     expect(row.system_prompt).toBeNull();
   });
@@ -53,47 +57,39 @@ describe('createTabRecord', () => {
 
   it('should use HOME for default working dir', () => {
     const originalHome = process.env.HOME;
-    process.env.HOME = '/home/testuser';
+    process.env.HOME = TMPDIR;
 
     try {
       createTabRecord(db, { name: 'test-tab' });
       const row = db.prepare('SELECT working_dir FROM tabs WHERE name = ?').get('test-tab') as any;
-      expect(row.working_dir).toBe('/home/testuser');
+      expect(row.working_dir).toBe(TMPDIR);
     } finally {
       process.env.HOME = originalHome;
     }
   });
 
-  it('should fall back to "/" when HOME is not set', () => {
-    const originalHome = process.env.HOME;
-    delete process.env.HOME;
-
-    try {
-      createTabRecord(db, { name: 'fallback-tab' });
-      const row = db.prepare('SELECT working_dir FROM tabs WHERE name = ?').get('fallback-tab') as any;
-      expect(row.working_dir).toBe('/');
-    } finally {
-      process.env.HOME = originalHome;
-    }
+  it('should reject a workingDir that does not exist', () => {
+    expect(() => createTabRecord(db, { name: 'bad-tab', workingDir: '/this/does/not/exist/anywhere' }))
+      .toThrow(/workingDir does not exist/);
   });
 
   it('should store systemPrompt when provided', () => {
-    createTabRecord(db, { name: 'custom', systemPrompt: 'You are a coding assistant.' });
+    createTabRecord(db, { name: 'custom', workingDir: TMPDIR, systemPrompt: 'You are a coding assistant.' });
 
     const row = db.prepare('SELECT system_prompt FROM tabs WHERE name = ?').get('custom') as any;
     expect(row.system_prompt).toBe('You are a coding assistant.');
   });
 
   it('should store null systemPrompt when not provided', () => {
-    createTabRecord(db, { name: 'plain' });
+    createTabRecord(db, { name: 'plain', workingDir: TMPDIR });
 
     const row = db.prepare('SELECT system_prompt FROM tabs WHERE name = ?').get('plain') as any;
     expect(row.system_prompt).toBeNull();
   });
 
   it('should generate unique IDs for different tabs', () => {
-    const r1 = createTabRecord(db, { name: 'tab-a' });
-    const r2 = createTabRecord(db, { name: 'tab-b' });
+    const r1 = createTabRecord(db, { name: 'tab-a', workingDir: TMPDIR });
+    const r2 = createTabRecord(db, { name: 'tab-b', workingDir: TMPDIR });
 
     expect(r1.id).not.toBe(r2.id);
     expect(r1.id).toMatch(/^[0-9a-f-]{36}$/);
@@ -101,7 +97,7 @@ describe('createTabRecord', () => {
   });
 
   it('should set session_id as a valid UUID', () => {
-    createTabRecord(db, { name: 'session-check' });
+    createTabRecord(db, { name: 'session-check', workingDir: TMPDIR });
 
     const row = db.prepare('SELECT session_id FROM tabs WHERE name = ?').get('session-check') as any;
     expect(row.session_id).toMatch(/^[0-9a-f-]{36}$/);

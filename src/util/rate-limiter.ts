@@ -28,6 +28,14 @@ export class RateLimiter {
       return false;
     }
 
+    // Bound the per-key map so a daemon that has seen many one-off keys
+    // (e.g. thousands of Telegram groups over months) doesn't leak memory.
+    if (this.perKey.size > 1000) {
+      for (const [k, w] of this.perKey) {
+        if (now > w.resetAt) this.perKey.delete(k);
+      }
+    }
+
     // Reset per-key window
     let keyWindow = this.perKey.get(key);
     if (!keyWindow || now > keyWindow.resetAt) {

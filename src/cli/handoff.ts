@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { getDb } from '../db/index.js';
 import { getConfig } from '../config.js';
+import { TabStore } from '../session/tab-store.js';
 
 interface TabInfo {
   name: string;
@@ -12,20 +13,19 @@ interface TabInfo {
 }
 
 export function exportTab(tabName: string): TabInfo | null {
-  const db = getDb();
-  const tab = db.prepare('SELECT * FROM tabs WHERE name = ?').get(tabName) as any;
+  const tab = TabStore.findByName(tabName);
   if (!tab) return null;
 
-  const messages = db.prepare(
+  const messages = getDb().prepare(
     'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
   ).all(tab.id) as Array<{ role: string; content: string }>;
 
   return {
     name: tab.name,
-    sessionId: tab.session_id,
-    workingDir: tab.working_dir,
+    sessionId: tab.sessionId,
+    workingDir: tab.workingDir,
     status: tab.status,
-    lastActivity: tab.last_activity_at,
+    lastActivity: tab.lastActivityAt,
     recentMessages: messages.reverse(),
   };
 }

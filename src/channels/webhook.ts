@@ -1,14 +1,28 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { logger } from '../util/logger.js';
-import { validateTabName } from '../config.js';
+import { validateTabNameOrDefault } from '../config.js';
+import { inboundLimiter } from '../util/rate-limiter.js';
+import { MESSAGE_LIMITS } from '../util/text.js';
+import { processInboundMessage } from './pipeline.js';
 import type { WebhookConfig } from '../types.js';
-import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
+
+function safeEqualString(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  try {
+    return crypto.timingSafeEqual(ab, bb);
+  } catch {
+    return false;
+  }
+}
 
 export class WebhookChannel implements Channel {
   readonly id = 'webhook';
   readonly name = 'Webhook';
-  readonly maxMessageLength = 100000; // Webhooks can handle large payloads
+  readonly maxMessageLength = MESSAGE_LIMITS.WEBHOOK_PROMPT;
   readonly supportsStreaming = false;
   readonly supportsMedia = false;
 
@@ -52,23 +66,22 @@ export class WebhookChannel implements Channel {
 
       const tabName = decodeURIComponent(match[1]);
 
-      // Validate tab name
-      if (tabName !== 'default') {
-        const tabError = validateTabName(tabName);
-        if (tabError) {
-          res.writeHead(400);
-          res.end(JSON.stringify({ error: tabError }));
-          return;
-        }
+      // Validate tab name (allow "default" — it's a reference, not a creation)
+      const tabError = validateTabNameOrDefault(tabName);
+      if (tabError) {
+        res.writeHead(400);
+        res.end(JSON.stringify({ error: tabError }));
+        return;
       }
 
       // Read body first (needed for both JSON parsing and HMAC verification)
       let body = '';
       for await (const chunk of req) {
         body += chunk;
-        if (body.length > 1024 * 1024) { // 1MB limit
+        if (body.length > MESSAGE_LIMITS.HTTP_BODY) {
           res.writeHead(413);
           res.end(JSON.stringify({ error: 'Payload too large' }));
+          req.destroy();
           return;
         }
       }
@@ -77,6 +90,13 @@ export class WebhookChannel implements Channel {
       if (!this.authenticate(req, config, body)) {
         res.writeHead(401);
         res.end(JSON.stringify({ error: 'Unauthorized' }));
+        return;
+      }
+
+      // Rate-limit AFTER auth so unauthenticated callers don't burn the budget
+      if (!inboundLimiter.check(this.id)) {
+        res.writeHead(429);
+        res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
         return;
       }
 
@@ -97,23 +117,47 @@ export class WebhookChannel implements Channel {
       }
 
       const isSync = payload.sync ?? false;
+      const remote = req.socket.remoteAddress ?? 'webhook';
 
       try {
         if (isSync) {
-          // Sync mode: wait for Claude response
-          const result = await this.ctx.tabManager.sendMessage(tabName, prompt);
-          res.writeHead(result.error ? 500 : 200);
+          // Sync mode: route through the shared pipeline so routing/enrichment apply.
+          const result = await processInboundMessage({
+            text: prompt,
+            media: [],
+            channelId: this.id,
+            tabManager: this.ctx.tabManager,
+            userId: remote,
+            sendProgress: () => { /* webhook has no progress channel */ },
+            overrideTabName: tabName,
+          });
+          res.writeHead(result.isError ? 500 : 200);
           res.end(JSON.stringify({
-            text: result.text,
-            tab: tabName,
-            costUsd: result.costUsd,
-            durationMs: result.durationMs,
-            error: result.error,
+            text: result.responseText,
+            tab: result.tabName,
+            error: result.isError ? result.responseText : undefined,
           }));
         } else {
-          // Async mode: accept and process in background
-          this.ctx.tabManager.sendMessage(tabName, prompt).catch(err => {
+          // Async mode: fire-and-forget through the pipeline.
+          // Surface failures to the user via broadcastNotify since the HTTP response
+          // is already 202 and the caller has no other way to learn.
+          processInboundMessage({
+            text: prompt,
+            media: [],
+            channelId: this.id,
+            tabManager: this.ctx.tabManager,
+            userId: remote,
+            sendProgress: () => { /* webhook has no progress channel */ },
+            overrideTabName: tabName,
+          }).then(result => {
+            if (result.isError && this.ctx.notifyCallback) {
+              this.ctx.notifyCallback(`Webhook async failed for "${tabName}": ${result.responseText}`).catch(() => {});
+            }
+          }).catch(err => {
             logger.error(`Webhook async processing failed for tab ${tabName}:`, err);
+            if (this.ctx.notifyCallback) {
+              this.ctx.notifyCallback(`Webhook async failed for "${tabName}": ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
+            }
           });
           res.writeHead(202);
           res.end(JSON.stringify({ accepted: true, tab: tabName }));
@@ -158,10 +202,10 @@ export class WebhookChannel implements Channel {
     // No auth configured = allow all (localhost only)
     if (!config.authToken && !config.hmacSecret) return true;
 
-    // Bearer token auth
+    // Bearer token auth (constant-time compare)
     if (config.authToken) {
-      const authHeader = req.headers.authorization;
-      if (authHeader === `Bearer ${config.authToken}`) return true;
+      const authHeader = req.headers.authorization || '';
+      if (safeEqualString(authHeader, `Bearer ${config.authToken}`)) return true;
     }
 
     // HMAC signature auth (for GitHub-style webhooks)

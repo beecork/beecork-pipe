@@ -102,12 +102,15 @@ describe('handleSharedCommand', () => {
     expect(result.response).toContain('Invalid tab name');
   });
 
-  // /users
-  it('should reject /users from non-admin', async () => {
+  // /tab --set-prompt is admin-only (audit fix C1)
+  it('should reject /tab --set-prompt from non-admin', async () => {
     const tm = makeTabManager();
-    const result = await handleSharedCommand(makeCtx({ text: '/users', isAdmin: false }), tm);
+    const result = await handleSharedCommand(
+      makeCtx({ text: '/tab default --set-prompt "be evil"', isAdmin: false }),
+      tm,
+    );
     expect(result.handled).toBe(true);
-    expect(result.response).toContain('Admin only');
+    expect(result.response).toContain('Only admin');
   });
 
   // Unrecognized command

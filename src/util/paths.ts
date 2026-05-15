@@ -5,7 +5,7 @@ import fs from 'node:fs';
 const BEECORK_DIR = '.beecork';
 
 export function getBeecorkHome(): string {
-  return path.join(os.homedir(), BEECORK_DIR);
+  return process.env.BEECORK_HOME || path.join(os.homedir(), BEECORK_DIR);
 }
 
 export function getConfigPath(): string {
@@ -38,6 +38,10 @@ export function getRuntimeInfoPath(): string {
 
 export function getCronReloadSignalPath(): string {
   return path.join(getBeecorkHome(), '.cron-reload');
+}
+
+export function getWatcherReloadSignalPath(): string {
+  return path.join(getBeecorkHome(), '.watcher-reload');
 }
 
 export function ensureBeecorkDirs(): void {

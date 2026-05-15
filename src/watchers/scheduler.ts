@@ -3,11 +3,9 @@ import path from 'node:path';
 import { WatcherStore } from './store.js';
 import { evaluateWatcher } from './evaluator.js';
 import { execAsync, intervalToMs } from '../tasks/scheduler.js';
-import { getBeecorkHome, getLogsDir } from '../util/paths.js';
+import { getLogsDir, getWatcherReloadSignalPath } from '../util/paths.js';
 import { logger } from '../util/logger.js';
 import type { Watcher } from './types.js';
-
-const WATCHER_RELOAD_SIGNAL_NAME = '.watcher-reload';
 
 export class WatcherScheduler {
   private store = new WatcherStore();
@@ -57,7 +55,7 @@ export class WatcherScheduler {
 
   /** Check for the reload signal file and reload if present */
   checkForReload(): void {
-    const signalPath = path.join(getBeecorkHome(), WATCHER_RELOAD_SIGNAL_NAME);
+    const signalPath = getWatcherReloadSignalPath();
     if (fs.existsSync(signalPath)) {
       try { fs.unlinkSync(signalPath); } catch { /* race condition, ok */ }
       logger.info('Watchers: reload signal detected, reloading');

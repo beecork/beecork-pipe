@@ -1,6 +1,21 @@
-import type { MediaAttachment } from '../channels/types.js';
+import type { MediaAttachment } from '../types.js';
 
-const DEFAULT_MAX_LENGTH = 4096;
+/**
+ * Shared message-size limits. Single source of truth so caps don't drift
+ * between channels, MCP, and dashboard.
+ */
+export const MESSAGE_LIMITS = {
+  /** Per-chunk send size (Telegram = 4096; other channels chunk to this too). */
+  CHUNK: 4096,
+  /** HTTP request body cap (webhook + dashboard endpoints). */
+  HTTP_BODY: 1024 * 1024, // 1 MB
+  /** Webhook channel single-message payload. */
+  WEBHOOK_PROMPT: 100_000, // 100 KB
+  /** MCP tool content/message field. Tight because it goes through Claude's tool-result token budget. */
+  MCP_CONTENT: 10_240, // 10 KB
+} as const;
+
+const DEFAULT_MAX_LENGTH = MESSAGE_LIMITS.CHUNK;
 
 /** Split long text into chunks that fit within a message limit */
 export function chunkText(text: string, maxLength: number = DEFAULT_MAX_LENGTH): string[] {
@@ -54,6 +69,16 @@ export function parseTabMessage(text: string): { tabName: string; prompt: string
     return { tabName: rest.slice(0, spaceIdx), prompt: rest.slice(spaceIdx + 1).trim() };
   }
   return { tabName: 'default', prompt: text };
+}
+
+/**
+ * Build the channel-side message text with an optional [tabName] prefix.
+ * Used by all three channels' sendResponse paths so the prefix format is
+ * consistent and the gate logic (skip "default", skip empty) lives in one place.
+ */
+export function formatTabbedResponse(text: string, tabName?: string): string {
+  if (!tabName || tabName === 'default') return text;
+  return `[${tabName}] ${text}`;
 }
 
 /** Build prompt text from media attachments */

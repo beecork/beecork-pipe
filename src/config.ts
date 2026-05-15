@@ -60,8 +60,8 @@ export function getConfig(): BeecorkConfig {
 export function saveConfig(config: BeecorkConfig): void {
   const configPath = getConfigPath();
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
-  fs.chmodSync(configPath, 0o600); // Owner-only read/write — contains API keys
+  // Owner-only mode set atomically with the write so there's no world-readable window.
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 });
   cachedConfig = config;
 }
 
@@ -75,10 +75,8 @@ export function resolveWorkingDir(tabName: string): string {
   return expandHome(tabConfig.workingDir);
 }
 
-export function getAdminUserId(): number {
-  const config = getConfig();
-  return config.telegram.adminUserId ?? config.telegram.allowedUserIds[0];
-}
+// getAdminUserId removed — admin check now lives in channels/admin.ts (isChannelAdmin)
+// so all 3 channels share the same policy instead of each reimplementing.
 
 const TAB_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$/;
 
@@ -89,8 +87,21 @@ export function validateTabName(name: string): string | null {
   return null; // valid
 }
 
+/**
+ * Like validateTabName but allows the literal name "default" (used by send/update
+ * endpoints that reference an existing tab rather than creating one).
+ */
+export function validateTabNameOrDefault(name: string): string | null {
+  if (name === 'default') return null;
+  return validateTabName(name);
+}
+
 function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
+  // Spread raw first so any future optional fields round-trip through saveConfig
+  // without needing to be enumerated here. Specific sections that need defaults
+  // get merged below.
   return {
+    ...raw,
     telegram: {
       ...DEFAULT_CONFIG.telegram,
       ...raw.telegram,
@@ -117,13 +128,5 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
       ?? (raw as { pipe?: { projectScanPaths?: string[] } }).pipe?.projectScanPaths
       ?? [...DEFAULT_PROJECT_SCAN_PATHS],
     deployment: raw.deployment ?? DEFAULT_CONFIG.deployment,
-    // Preserve optional config sections (no defaults needed)
-    whatsapp: raw.whatsapp,
-    discord: raw.discord,
-    webhook: raw.webhook,
-    voice: raw.voice,
-    groups: raw.groups,
-    notifications: raw.notifications,
-    mediaGenerators: raw.mediaGenerators,
   };
 }

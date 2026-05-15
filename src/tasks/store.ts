@@ -7,7 +7,7 @@ import type { Task } from '../types.js';
 // SQLite row uses snake_case
 interface TaskRow {
   id: string; name: string; schedule_type: string; schedule: string;
-  tab_name: string; message: string; enabled: number; user_id: string;
+  tab_name: string; message: string; enabled: number;
   payload_type?: string;
   created_at: string; last_run_at: string | null; next_run_at: string | null;
 }
@@ -30,7 +30,7 @@ export class TaskStore {
 
   list(): Task[] {
     const db = getDb();
-    return (db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all('local') as TaskRow[]).map(rowToTask);
+    return (db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[]).map(rowToTask);
   }
 
   get(id: string): Task | undefined {
@@ -41,10 +41,10 @@ export class TaskStore {
 
   add(job: Task): void {
     const db = getDb();
-    db.prepare(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, user_id, created_at, last_run_at, next_run_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    db.prepare(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, created_at, last_run_at, next_run_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       job.id, job.name, job.scheduleType, job.schedule, job.tabName, job.message,
-      job.payloadType || 'agentTurn', job.enabled ? 1 : 0, 'local', job.createdAt, job.lastRunAt, job.nextRunAt,
+      job.payloadType || 'agentTurn', job.enabled ? 1 : 0, job.createdAt, job.lastRunAt, job.nextRunAt,
     );
   }
 
@@ -93,13 +93,13 @@ export class TaskStore {
       const jobs = data.jobs || [];
       if (jobs.length === 0) return;
 
-      const insert = db.prepare(`INSERT OR IGNORE INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled, user_id, created_at, last_run_at, next_run_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const insert = db.prepare(`INSERT OR IGNORE INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled, created_at, last_run_at, next_run_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
       const tx = db.transaction(() => {
         for (const j of jobs) {
           insert.run(j.id, j.name, j.scheduleType, j.schedule, j.tabName || 'default', j.message,
-            j.enabled ? 1 : 0, 'local', j.createdAt, j.lastRunAt, j.nextRunAt);
+            j.enabled ? 1 : 0, j.createdAt, j.lastRunAt, j.nextRunAt);
         }
       });
       tx();

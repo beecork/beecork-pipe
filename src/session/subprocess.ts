@@ -36,6 +36,7 @@ export class ClaudeSubprocess {
   private proc: ChildProcess | null = null;
   private buffer: string = '';
   private killTimer: ReturnType<typeof setTimeout> | null = null;
+  private runtimeTimer: ReturnType<typeof setTimeout> | null = null;
   readonly sessionId: string;
 
   constructor(
@@ -92,15 +93,29 @@ export class ClaudeSubprocess {
 
     this.proc.on('error', (err) => {
       this.proc = null;
+      if (this.runtimeTimer) { clearTimeout(this.runtimeTimer); this.runtimeTimer = null; }
       callbacks.onError(err);
     });
 
     this.proc.on('exit', (code) => {
       this.proc = null;
       if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
+      if (this.runtimeTimer) { clearTimeout(this.runtimeTimer); this.runtimeTimer = null; }
       logger.info(`[${this.tabName}] Claude subprocess exited (code: ${code})`);
       callbacks.onExit(code);
     });
+
+    // Hard runtime cap so a wedged claude can't pin a tab forever.
+    // Default 30 minutes. Disable by setting maxRuntimeMs to 0.
+    const maxRuntimeMs = this.config.claudeCode.maxRuntimeMs ?? 30 * 60 * 1000;
+    if (maxRuntimeMs > 0) {
+      this.runtimeTimer = setTimeout(() => {
+        if (!this.proc) return;
+        logger.warn(`[${this.tabName}] Subprocess exceeded maxRuntimeMs (${maxRuntimeMs}ms) — killing`);
+        callbacks.onError(new Error(`Subprocess timed out after ${Math.round(maxRuntimeMs / 1000)}s`));
+        this.kill();
+      }, maxRuntimeMs);
+    }
   }
 
   kill(): void {
