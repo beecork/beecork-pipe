@@ -1,21 +1,37 @@
 import { getDb } from '../db/index.js';
-import type { ActivityEvent } from './types.js';
+import type { ActivityEvent, EventType } from './types.js';
 
 interface ActivityRow {
-  id: string; event_type: string; project_name: string | null; tab_name: string | null;
-  summary: string; details: string | null; duration_ms: number | null; cost_usd: number | null;
+  id: string;
+  event_type: string;
+  project_name: string | null;
+  tab_name: string | null;
+  summary: string;
+  details: string | null;
+  duration_ms: number | null;
+  cost_usd: number | null;
   created_at: string;
 }
 
 function rowToEvent(r: ActivityRow): ActivityEvent {
   return {
-    id: r.id, eventType: r.event_type as any, projectName: r.project_name,
-    tabName: r.tab_name, summary: r.summary, details: r.details,
-    durationMs: r.duration_ms, costUsd: r.cost_usd, createdAt: r.created_at,
+    id: r.id,
+    eventType: r.event_type as EventType,
+    projectName: r.project_name,
+    tabName: r.tab_name,
+    summary: r.summary,
+    details: r.details,
+    durationMs: r.duration_ms,
+    costUsd: r.cost_usd,
+    createdAt: r.created_at,
   };
 }
 
-export function getTimeline(options?: { date?: string; tabName?: string; limit?: number }): ActivityEvent[] {
+export function getTimeline(options?: {
+  date?: string;
+  tabName?: string;
+  limit?: number;
+}): ActivityEvent[] {
   const db = getDb();
   let query = 'SELECT * FROM activity_log';
   const conditions: string[] = [];
@@ -66,7 +82,9 @@ export function formatTimeline(events: ActivityEvent[]): string {
 
 export function getReplayInfo(eventId: string): { tabName: string; message: string } | null {
   const db = getDb();
-  const event = db.prepare('SELECT * FROM activity_log WHERE id = ?').get(eventId) as ActivityRow | undefined;
+  const event = db.prepare('SELECT * FROM activity_log WHERE id = ?').get(eventId) as
+    | ActivityRow
+    | undefined;
   if (!event || !event.tab_name || !event.details) return null;
   return { tabName: event.tab_name, message: event.details };
 }

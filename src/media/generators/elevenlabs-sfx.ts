@@ -8,7 +8,11 @@ export class ElevenLabsSfxGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'audio') throw new Error('ElevenLabs SFX only supports audio generation');
 
     const response = await fetch('https://api.elevenlabs.io/v1/sound-generation', {

@@ -11,21 +11,48 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
 // Per-user current context tracking (in-memory, resets on daemon restart)
 const userContext = new Map<string, { projectName: string; tabName: string; updatedAt: number }>();
 
+interface CachedProject extends Project {
+  nameLower: string;
+}
+
+// Project list cache. listProjects() ran on every inbound message and re-did a
+// full SELECT + ORDER BY across the projects table; with N projects each call
+// then re-lowercased every name. The cache is invalidated explicitly via
+// invalidateProjectCache() at the few sites that mutate the table.
+let projectsCache: { user: CachedProject[]; expiresAt: number } | null = null;
+const PROJECTS_CACHE_TTL_MS = 30_000;
+
+function getUserProjectsCached(): CachedProject[] {
+  const now = Date.now();
+  if (projectsCache && projectsCache.expiresAt > now) return projectsCache.user;
+  const user = listProjects()
+    .filter((p) => p.type === 'user-project')
+    .map((p) => ({ ...p, nameLower: p.name.toLowerCase() }));
+  projectsCache = { user, expiresAt: now + PROJECTS_CACHE_TTL_MS };
+  return user;
+}
+
+/** Invalidate the project cache. Call after createProject/discoverProjects/etc. */
+export function invalidateProjectCache(): void {
+  projectsCache = null;
+}
+
 /** Route a message to the right project and tab */
 export function routeMessage(message: string, context?: RoutingContext): RouteDecision {
-  const projects = listProjects().filter(p => p.type === 'user-project');
+  const projects = getUserProjectsCached();
   const userId = context?.userId || 'default';
+  const messageLower = message.toLowerCase();
 
   // 1. Check for explicit project mention by name
-  const mentionedProject = findMentionedProject(message, projects);
+  const mentionedProject = findMentionedProject(messageLower, projects);
   if (mentionedProject) {
-    const tabName = resolveTabInProject(mentionedProject, message, context);
+    const { tabName, exists } = resolveTabInProject(mentionedProject);
     touchProject(mentionedProject.name);
     recordRouting(message, mentionedProject.name);
     return {
       project: mentionedProject,
       tabName,
-      isNewTab: !tabExists(tabName),
+      isNewTab: !exists,
       confidence: 0.95,
       needsConfirmation: false,
       reason: `Message mentions project "${mentionedProject.name}"`,
@@ -34,7 +61,8 @@ export function routeMessage(message: string, context?: RoutingContext): RouteDe
 
   // 2. Check if continuing current context
   const currentCtx = userContext.get(userId);
-  if (currentCtx && Date.now() - currentCtx.updatedAt < 10 * 60 * 1000) { // 10 min window
+  if (currentCtx && Date.now() - currentCtx.updatedAt < 10 * 60 * 1000) {
+    // 10 min window
     const project = getProject(currentCtx.projectName);
     if (project) {
       touchProject(project.name);
@@ -50,16 +78,16 @@ export function routeMessage(message: string, context?: RoutingContext): RouteDe
   }
 
   // 3. Check routing preferences (learned patterns)
-  const learned = checkLearnedRouting(message);
+  const learned = checkLearnedRouting(messageLower);
   if (learned) {
     const project = getProject(learned.projectName);
     if (project && learned.confidence >= 0.9) {
-      const tabName = resolveTabInProject(project, message, context);
+      const { tabName, exists } = resolveTabInProject(project);
       touchProject(project.name);
       return {
         project,
         tabName,
-        isNewTab: !tabExists(tabName),
+        isNewTab: !exists,
         confidence: learned.confidence,
         needsConfirmation: false,
         reason: `Learned pattern → "${project.name}"`,
@@ -68,7 +96,7 @@ export function routeMessage(message: string, context?: RoutingContext): RouteDe
   }
 
   // 4. Multiple projects could match — ask user
-  const possibleMatches = findPossibleMatches(message, projects);
+  const possibleMatches = findPossibleMatches(messageLower, projects);
   if (possibleMatches.length > 1) {
     return {
       project: possibleMatches[0],
@@ -76,12 +104,12 @@ export function routeMessage(message: string, context?: RoutingContext): RouteDe
       isNewTab: false,
       confidence: 0.5,
       needsConfirmation: true,
-      reason: `Multiple projects could match: ${possibleMatches.map(p => p.name).join(', ')}`,
+      reason: `Multiple projects could match: ${possibleMatches.map((p) => p.name).join(', ')}`,
     };
   }
 
   // 5. Check for category keywords (non-project)
-  const category = detectCategory(message);
+  const category = detectCategory(messageLower);
   if (category) {
     const project = ensureCategory(category);
     const tabName = category;
@@ -115,50 +143,47 @@ export function setUserContext(userId: string, projectName: string, tabName: str
     let oldestKey = '';
     let oldestTime = Infinity;
     for (const [key, val] of userContext) {
-      if (val.updatedAt < oldestTime) { oldestTime = val.updatedAt; oldestKey = key; }
+      if (val.updatedAt < oldestTime) {
+        oldestTime = val.updatedAt;
+        oldestKey = key;
+      }
     }
     if (oldestKey) userContext.delete(oldestKey);
   }
 }
 
-/** Find a project explicitly mentioned by name in the message */
-function findMentionedProject(message: string, projects: Project[]): Project | null {
-  const lower = message.toLowerCase();
-  // Check for exact project name mentions
+/** Find a project explicitly mentioned by name in the message (messageLower already lower-cased) */
+function findMentionedProject(
+  messageLower: string,
+  projects: CachedProject[],
+): CachedProject | null {
   for (const project of projects) {
-    if (lower.includes(project.name.toLowerCase())) {
-      return project;
-    }
+    if (messageLower.includes(project.nameLower)) return project;
   }
   return null;
 }
 
 /** Find possible project matches (for ambiguity) */
-function findPossibleMatches(message: string, projects: Project[]): Project[] {
-  const lower = message.toLowerCase();
-  const words = lower.split(/\s+/);
-  return projects.filter(p => {
-    const nameParts = p.name.toLowerCase().split(/[-_]/);
-    return nameParts.some(part => words.includes(part));
+function findPossibleMatches(messageLower: string, projects: CachedProject[]): CachedProject[] {
+  const words = messageLower.split(/\s+/);
+  return projects.filter((p) => {
+    const nameParts = p.nameLower.split(/[-_]/);
+    return nameParts.some((part) => words.includes(part));
   });
 }
 
-/** Resolve which tab to use within a project */
-function resolveTabInProject(project: Project, _message: string, _context?: RoutingContext): string {
+/**
+ * Resolve which tab to use within a project. Coalesces the previous
+ * "find tabs + tabExists" into one query — the caller used to fire both
+ * back-to-back, and the working_dir scan had no covering index.
+ * (Index added by migration v28; see src/db/migrations.ts.)
+ */
+function resolveTabInProject(project: Project): { tabName: string; exists: boolean } {
   const db = getDb();
-
-  // Find existing tabs for this project
-  const tabs = db.prepare(
-    'SELECT name, last_activity_at FROM tabs WHERE working_dir = ? ORDER BY last_activity_at DESC'
-  ).all(project.path) as Array<{ name: string; last_activity_at: string }>;
-
-  if (tabs.length === 0) {
-    // No tabs yet — use project name as tab name
-    return project.name;
-  }
-
-  // Use most recently active tab in this project
-  return tabs[0].name;
+  const row = db
+    .prepare('SELECT name FROM tabs WHERE working_dir = ? ORDER BY last_activity_at DESC LIMIT 1')
+    .get(project.path) as { name: string } | undefined;
+  return row ? { tabName: row.name, exists: true } : { tabName: project.name, exists: false };
 }
 
 /** Check if a tab exists in the database */
@@ -168,13 +193,10 @@ function tabExists(tabName: string): boolean {
   return !!row;
 }
 
-/** Detect a category from keywords */
-function detectCategory(message: string): string | null {
-  const lower = message.toLowerCase();
+/** Detect a category from keywords (messageLower already lower-cased) */
+function detectCategory(messageLower: string): string | null {
   for (const [category, keywords] of Object.entries(CATEGORY_KEYWORDS)) {
-    if (keywords.some(kw => lower.includes(kw))) {
-      return category;
-    }
+    if (keywords.some((kw) => messageLower.includes(kw))) return category;
   }
   return null;
 }
@@ -183,31 +205,48 @@ function detectCategory(message: string): string | null {
 function recordRouting(message: string, projectName: string): void {
   const db = getDb();
   // Extract key words from message for pattern matching
-  const words = message.toLowerCase().split(/\s+/).filter(w => w.length > 3).slice(0, 5);
+  const words = message
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w.length > 3)
+    .slice(0, 5);
   const pattern = words.join(' ');
   if (!pattern) return;
 
-  db.prepare(`
+  db.prepare(
+    `
     INSERT INTO routing_preferences (pattern, project_name)
     VALUES (?, ?)
     ON CONFLICT(pattern, project_name) DO UPDATE SET hit_count = hit_count + 1
-  `).run(pattern, projectName);
+  `,
+  ).run(pattern, projectName);
 }
 
-/** Check learned routing preferences */
-function checkLearnedRouting(message: string): { projectName: string; confidence: number } | null {
+/** Check learned routing preferences (messageLower already lower-cased) */
+function checkLearnedRouting(
+  messageLower: string,
+): { projectName: string; confidence: number } | null {
   const db = getDb();
-  const words = message.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  const words = messageLower.split(/\s+/).filter((w) => w.length > 3);
   if (words.length === 0) return null;
 
   // Fetch all preferences in a single query and match in JS
-  const allPrefs = db.prepare(
-    'SELECT pattern, project_name, confidence, hit_count FROM routing_preferences WHERE hit_count >= 3 ORDER BY hit_count DESC LIMIT 200'
-  ).all() as Array<{ pattern: string; project_name: string; confidence: number; hit_count: number }>;
+  const allPrefs = db
+    .prepare(
+      'SELECT pattern, project_name, confidence, hit_count FROM routing_preferences WHERE hit_count >= 3 ORDER BY hit_count DESC LIMIT 200',
+    )
+    .all() as Array<{
+    pattern: string;
+    project_name: string;
+    confidence: number;
+    hit_count: number;
+  }>;
 
   for (const pref of allPrefs) {
-    const patternLower = pref.pattern.toLowerCase();
-    if (words.some(word => patternLower.includes(word) || word.includes(patternLower))) {
+    // pref.pattern was written via .toLowerCase() in recordRouting(), so no
+    // re-lowercase here (saves N allocations per inbound message).
+    const patternLower = pref.pattern;
+    if (words.some((word) => patternLower.includes(word) || word.includes(patternLower))) {
       return { projectName: pref.project_name, confidence: Math.min(pref.confidence, 0.9) };
     }
   }

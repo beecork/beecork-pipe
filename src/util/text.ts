@@ -84,15 +84,21 @@ export function formatTabbedResponse(text: string, tabName?: string): string {
 /** Build prompt text from media attachments */
 export function buildMediaPrompt(media: MediaAttachment[], textPrompt: string): string {
   if (media.length === 0) return textPrompt;
-  const descriptions = media.map(m => {
+  const descriptions = media.map((m) => {
     if (m.type === 'voice' && m.caption?.startsWith('[Transcribed')) return m.caption;
     switch (m.type) {
-      case 'image': return `User sent an image: ${m.filePath}`;
-      case 'voice': return `User sent a voice message: ${m.filePath}`;
-      case 'audio': return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-      case 'video': return `User sent a video: ${m.filePath}`;
-      case 'document': return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
-      default: return `User sent a file: ${m.filePath}`;
+      case 'image':
+        return `User sent an image: ${m.filePath}`;
+      case 'voice':
+        return `User sent a voice message: ${m.filePath}`;
+      case 'audio':
+        return `User sent an audio file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+      case 'video':
+        return `User sent a video: ${m.filePath}`;
+      case 'document':
+        return `User sent a file: ${m.filePath}${m.fileName ? ` (${m.fileName})` : ''}`;
+      default:
+        return `User sent a file: ${m.filePath}`;
     }
   });
   const mediaText = descriptions.join('\n');

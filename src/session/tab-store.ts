@@ -38,7 +38,9 @@ function rowToTab(row: TabRow): Tab {
  */
 export const TabStore = {
   listAll(db: Database.Database = getDb()): Tab[] {
-    return (db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[]).map(rowToTab);
+    return (db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[]).map(
+      rowToTab,
+    );
   },
 
   findByName(name: string, db: Database.Database = getDb()): Tab | undefined {
@@ -47,7 +49,9 @@ export const TabStore = {
   },
 
   getIdByName(name: string, db: Database.Database = getDb()): string | undefined {
-    const row = db.prepare('SELECT id FROM tabs WHERE name = ?').get(name) as { id: string } | undefined;
+    const row = db.prepare('SELECT id FROM tabs WHERE name = ?').get(name) as
+      | { id: string }
+      | undefined;
     return row?.id;
   },
 
@@ -56,23 +60,32 @@ export const TabStore = {
   },
 
   countRunning(db: Database.Database = getDb()): number {
-    return (db.prepare("SELECT COUNT(*) as c FROM tabs WHERE status = 'running'").get() as { c: number }).c;
+    return (
+      db.prepare("SELECT COUNT(*) as c FROM tabs WHERE status = 'running'").get() as { c: number }
+    ).c;
   },
 
   /** All tabs marked 'running' — used by daemon crash-recovery on startup. */
   findRunning(db: Database.Database = getDb()): Tab[] {
-    return (db.prepare("SELECT * FROM tabs WHERE status = 'running'").all() as TabRow[]).map(rowToTab);
+    return (db.prepare("SELECT * FROM tabs WHERE status = 'running'").all() as TabRow[]).map(
+      rowToTab,
+    );
   },
 
   /** Most-recently-active tab — used by MCP to surface "current" context. */
   mostRecent(db: Database.Database = getDb()): Tab | undefined {
-    const row = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC LIMIT 1').get() as TabRow | undefined;
+    const row = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC LIMIT 1').get() as
+      | TabRow
+      | undefined;
     return row ? rowToTab(row) : undefined;
   },
 
   setStatus(name: string, status: TabStatus, db: Database.Database = getDb()): void {
-    db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
-      .run(status, new Date().toISOString(), name);
+    db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?').run(
+      status,
+      new Date().toISOString(),
+      name,
+    );
   },
 
   setIdleById(id: string, db: Database.Database = getDb()): void {
@@ -81,11 +94,15 @@ export const TabStore = {
 
   /** Used by MCP close-tab to nudge daemon recovery loop. */
   markRunningAsStopped(name: string, db: Database.Database = getDb()): void {
-    db.prepare("UPDATE tabs SET status = 'stopped', pid = NULL WHERE name = ? AND status = 'running'").run(name);
+    db.prepare(
+      "UPDATE tabs SET status = 'stopped', pid = NULL WHERE name = ? AND status = 'running'",
+    ).run(name);
   },
 
   setSystemPrompt(name: string, systemPrompt: string, db: Database.Database = getDb()): boolean {
-    const result = db.prepare('UPDATE tabs SET system_prompt = ? WHERE name = ?').run(systemPrompt, name);
+    const result = db
+      .prepare('UPDATE tabs SET system_prompt = ? WHERE name = ?')
+      .run(systemPrompt, name);
     return result.changes > 0;
   },
 

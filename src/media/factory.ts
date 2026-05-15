@@ -11,24 +11,35 @@ import { ElevenLabsMusicGenerator } from './generators/elevenlabs-music.js';
 import { LyriaGenerator } from './generators/lyria.js';
 import { RecraftGenerator } from './generators/recraft.js';
 
-export function createMediaGenerator(config: { provider: string; apiKey?: string; model?: string }): MediaGenerator | null {
+type GeneratorBuilder = (apiKey: string, model?: string) => MediaGenerator;
+
+// Lookup table — adding a new generator becomes one entry instead of one switch case.
+const GENERATOR_BUILDERS: Record<string, GeneratorBuilder> = {
+  'dall-e': (k, m) => new DalleGenerator(k, m),
+  'stable-diffusion': (k) => new StableDiffusionGenerator(k),
+  runway: (k) => new RunwayGenerator(k),
+  veo: (k) => new VeoGenerator(k),
+  kling: (k) => new KlingGenerator(k),
+  'elevenlabs-sfx': (k) => new ElevenLabsSfxGenerator(k),
+  'nano-banana': (k, m) => new NanoBananaGenerator(k, m),
+  'elevenlabs-music': (k) => new ElevenLabsMusicGenerator(k),
+  lyria: (k, m) => new LyriaGenerator(k, m),
+  recraft: (k) => new RecraftGenerator(k),
+};
+
+export function createMediaGenerator(config: {
+  provider: string;
+  apiKey?: string;
+  model?: string;
+}): MediaGenerator | null {
   if (!config.apiKey) {
     logger.warn(`Media generator ${config.provider}: missing API key`);
     return null;
   }
-  switch (config.provider) {
-    case 'dall-e': return new DalleGenerator(config.apiKey, config.model);
-    case 'stable-diffusion': return new StableDiffusionGenerator(config.apiKey);
-    case 'runway': return new RunwayGenerator(config.apiKey);
-    case 'veo': return new VeoGenerator(config.apiKey);
-    case 'kling': return new KlingGenerator(config.apiKey);
-    case 'elevenlabs-sfx': return new ElevenLabsSfxGenerator(config.apiKey);
-    case 'nano-banana': return new NanoBananaGenerator(config.apiKey, config.model);
-    case 'elevenlabs-music': return new ElevenLabsMusicGenerator(config.apiKey);
-    case 'lyria': return new LyriaGenerator(config.apiKey, config.model);
-    case 'recraft': return new RecraftGenerator(config.apiKey);
-    default:
-      logger.warn(`Unknown media generator: ${config.provider}`);
-      return null;
+  const build = GENERATOR_BUILDERS[config.provider];
+  if (!build) {
+    logger.warn(`Unknown media generator: ${config.provider}`);
+    return null;
   }
+  return build(config.apiKey, config.model);
 }

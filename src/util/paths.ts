@@ -44,10 +44,20 @@ export function getWatcherReloadSignalPath(): string {
   return path.join(getBeecorkHome(), '.watcher-reload');
 }
 
+export function getWhatsappSessionPath(): string {
+  return path.join(getBeecorkHome(), 'whatsapp-session');
+}
+
 export function ensureBeecorkDirs(): void {
   const home = getBeecorkHome();
-  fs.mkdirSync(home, { recursive: true });
-  fs.mkdirSync(getLogsDir(), { recursive: true });
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  // Upgrade an existing dir that was created with a looser umask before this fix landed.
+  try {
+    fs.chmodSync(home, 0o700);
+  } catch {
+    /* not fatal if mode change fails */
+  }
+  fs.mkdirSync(getLogsDir(), { recursive: true, mode: 0o700 });
 }
 
 export function expandHome(p: string): string {

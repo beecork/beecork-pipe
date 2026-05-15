@@ -6,16 +6,24 @@ export class DalleGenerator implements MediaGenerator {
   readonly name = 'DALL-E (OpenAI)';
   readonly supportedTypes: MediaType[] = ['image'];
 
-  constructor(private apiKey: string, private model: string = 'dall-e-3') {}
+  constructor(
+    private apiKey: string,
+    private model: string = 'dall-e-3',
+  ) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'image') throw new Error('DALL-E only supports image generation');
 
-    const size = options?.width && options?.height ? `${options.width}x${options.height}` : '1024x1024';
+    const size =
+      options?.width && options?.height ? `${options.width}x${options.height}` : '1024x1024';
     const response = await fetch('https://api.openai.com/v1/images/generations', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -34,7 +42,7 @@ export class DalleGenerator implements MediaGenerator {
       throw new Error(`DALL-E error ${response.status}: ${err.slice(0, 200)}`);
     }
 
-    const data = await response.json() as { data: Array<{ b64_json: string }> };
+    const data = (await response.json()) as { data: Array<{ b64_json: string }> };
     const buffer = Buffer.from(data.data[0].b64_json, 'base64');
     const filePath = saveMedia(buffer, 'png', 'generated-image.png');
     return { filePath, mimeType: 'image/png' };

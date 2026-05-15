@@ -36,7 +36,9 @@ const program = new Command();
 program
   .name('beecork')
   .version(VERSION)
-  .description('Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock');
+  .description(
+    'Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock',
+  );
 
 program
   .command('setup')
@@ -45,25 +47,30 @@ program
     await setupWizard();
   });
 
-program
-  .command('start')
-  .description('Start the Beecork daemon')
-  .action(startDaemon);
+program.command('start').description('Start the Beecork daemon').action(startDaemon);
+
+program.command('stop').description('Stop the Beecork daemon').action(stopDaemon);
 
 program
-  .command('stop')
-  .description('Stop the Beecork daemon')
-  .action(stopDaemon);
+  .command('uninstall')
+  .description('Uninstall the Beecork system service (launchd / systemd / Task Scheduler)')
+  .action(async () => {
+    const { uninstallService } = await import('./service/install.js');
+    try {
+      const result = uninstallService();
+      console.log(result);
+    } catch (err) {
+      console.error('Service uninstall failed:', err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    }
+  });
 
 program
   .command('status')
   .description('Show daemon status, running tabs, and tasks')
   .action(showStatus);
 
-program
-  .command('tabs')
-  .description('List all virtual tabs')
-  .action(listTabs);
+program.command('tabs').description('List all virtual tabs').action(listTabs);
 
 program
   .command('logs [tab]')
@@ -71,19 +78,11 @@ program
   .action(tailLogs);
 
 // Tasks (new name)
-const taskCmd = program
-  .command('tasks')
-  .description('Manage scheduled tasks');
+const taskCmd = program.command('tasks').description('Manage scheduled tasks');
 
-taskCmd
-  .command('list')
-  .description('List all tasks')
-  .action(listCrons);
+taskCmd.command('list').description('List all tasks').action(listCrons);
 
-taskCmd
-  .command('delete <id>')
-  .description('Delete a task by ID')
-  .action(deleteCron);
+taskCmd.command('delete <id>').description('Delete a task by ID').action(deleteCron);
 
 program
   .command('task')
@@ -103,15 +102,9 @@ const cronCmd = program
   .command('cron', { hidden: true })
   .description('Manage cron jobs (alias for tasks)');
 
-cronCmd
-  .command('list')
-  .description('List all cron jobs')
-  .action(listCrons);
+cronCmd.command('list').description('List all cron jobs').action(listCrons);
 
-cronCmd
-  .command('delete <id>')
-  .description('Delete a cron job by ID')
-  .action(deleteCron);
+cronCmd.command('delete <id>').description('Delete a cron job by ID').action(deleteCron);
 
 // Watcher commands
 program
@@ -136,28 +129,18 @@ program
     }
   });
 
-const memoryCmd = program
-  .command('memory')
-  .description('Manage long-term memories');
+const memoryCmd = program.command('memory').description('Manage long-term memories');
 
-memoryCmd
-  .command('list')
-  .description('List stored memories')
-  .action(listMemories);
+memoryCmd.command('list').description('List stored memories').action(listMemories);
 
-memoryCmd
-  .command('delete <id>')
-  .description('Delete a memory by ID')
-  .action(deleteMemory);
+memoryCmd.command('delete <id>').description('Delete a memory by ID').action(deleteMemory);
 
 program
   .command('send <message>')
   .description('Send a message to the default tab (for testing)')
   .action(sendMessage);
 
-const channelCmd = program
-  .command('channel')
-  .description('Manage community channel plugins');
+const channelCmd = program.command('channel').description('Manage community channel plugins');
 
 channelCmd
   .command('install <package>')
@@ -189,7 +172,10 @@ program
   .action(async () => {
     const readline = await import('node:readline');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+    const ask = (q: string, def?: string): Promise<string> =>
+      new Promise((r) =>
+        rl.question(def ? `${q} [${def}]: ` : `${q}: `, (a) => r(a.trim() || def || '')),
+      );
 
     console.log('\nDiscord Setup\n');
     console.log('  1. Go to https://discord.com/developers/applications');
@@ -200,7 +186,11 @@ program
     console.log('  6. Use OAuth2 URL Generator to invite bot to your server\n');
 
     const token = await ask('Discord bot token');
-    if (!token) { console.log('No token provided. Cancelled.'); rl.close(); return; }
+    if (!token) {
+      console.log('No token provided. Cancelled.');
+      rl.close();
+      return;
+    }
 
     const userId = await ask('Your Discord user ID');
 
@@ -219,7 +209,7 @@ program
   .action(async (opts: { disable?: boolean }) => {
     if (opts.disable) {
       const { getConfig, saveConfig } = await import('./config.js');
-      const { getBeecorkHome } = await import('./util/paths.js');
+      const { getWhatsappSessionPath } = await import('./util/paths.js');
       const fs = await import('node:fs');
       const config = getConfig();
       if (config.whatsapp) {
@@ -227,7 +217,7 @@ program
         saveConfig(config);
       }
       // Remove session files
-      const sessionPath = `${getBeecorkHome()}/whatsapp-session`;
+      const sessionPath = getWhatsappSessionPath();
       if (fs.existsSync(sessionPath)) {
         fs.rmSync(sessionPath, { recursive: true, force: true });
       }
@@ -249,20 +239,29 @@ program
     const readline = await import('node:readline');
     const fs = await import('node:fs');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+    const ask = (q: string, def?: string): Promise<string> =>
+      new Promise((r) =>
+        rl.question(def ? `${q} [${def}]: ` : `${q}: `, (a) => r(a.trim() || def || '')),
+      );
 
     console.log('\nWhatsApp Setup\n');
     console.log('  You need two WhatsApp accounts:');
     console.log('  1. A bot account (separate SIM) — will scan the QR code to pair');
     console.log('  2. Your personal number — allowed to message the bot\n');
 
-    const number = await ask('Your personal WhatsApp number (the one that will message the bot, e.g., 14155551234)');
-    if (!number) { console.log('No number provided. Cancelled.'); rl.close(); return; }
+    const number = await ask(
+      'Your personal WhatsApp number (the one that will message the bot, e.g., 14155551234)',
+    );
+    if (!number) {
+      console.log('No number provided. Cancelled.');
+      rl.close();
+      return;
+    }
 
     const { getConfig, saveConfig } = await import('./config.js');
-    const { getBeecorkHome } = await import('./util/paths.js');
+    const { getWhatsappSessionPath } = await import('./util/paths.js');
     const config = getConfig();
-    const sessionPath = `${getBeecorkHome()}/whatsapp-session`;
+    const sessionPath = getWhatsappSessionPath();
     config.whatsapp = {
       enabled: true,
       mode: 'baileys',
@@ -275,7 +274,12 @@ program
 
     // Pair immediately — show QR code in this terminal
     try {
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
+      const {
+        default: makeWASocket,
+        useMultiFileAuthState,
+        DisconnectReason,
+        fetchLatestBaileysVersion,
+      } = await import('@whiskeysockets/baileys');
       const pino = (await import('pino')).default;
       const silentLogger = pino({ level: 'silent' });
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
@@ -292,52 +296,66 @@ program
 
         sock.ev.on('creds.update', saveCreds);
 
-        sock.ev.on('connection.update', async (update: { connection?: string; lastDisconnect?: { error?: Error }; qr?: string }) => {
-          if (update.qr) {
-            try {
-              const qrcodeTerminal = await import('qrcode-terminal');
-              (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
-              console.log('Scan with the BOT phone (WhatsApp → Linked Devices → Link a Device)\n');
-            } catch {
-              console.log('QR data:', update.qr);
-            }
-          }
-          if (update.connection === 'open') {
-            paired = true;
-            console.log('✓ WhatsApp paired successfully!');
-            sock.end(undefined);
-            // Auto-restart daemon
-            const { getDaemonPid } = await import('./cli/helpers.js');
-            const pid = getDaemonPid();
-            if (pid) {
-              console.log('  Restarting daemon with WhatsApp enabled...');
-              const { execSync } = await import('node:child_process');
+        sock.ev.on(
+          'connection.update',
+          async (update: {
+            connection?: string;
+            lastDisconnect?: { error?: Error };
+            qr?: string;
+          }) => {
+            if (update.qr) {
               try {
-                execSync('beecork stop', { stdio: 'ignore' });
-                execSync('beecork start', { stdio: 'ignore' });
-                console.log('  ✓ Daemon restarted.\n');
+                const qrcodeTerminal = await import('qrcode-terminal');
+                (qrcodeTerminal.default || qrcodeTerminal).generate(update.qr, { small: true });
+                console.log(
+                  'Scan with the BOT phone (WhatsApp → Linked Devices → Link a Device)\n',
+                );
               } catch {
-                console.log('  Could not restart daemon. Run: beecork stop && beecork start\n');
+                console.log('QR data:', update.qr);
               }
-            } else {
-              console.log('  Start the daemon: beecork start\n');
             }
-            process.exit(0);
-          }
-          if (update.connection === 'close') {
-            if (paired) return; // Expected disconnect after pairing
-            const reason = (update.lastDisconnect?.error as any)?.output?.statusCode;
-            if (reason === DisconnectReason.loggedOut) {
-              console.log('\n✗ WhatsApp logged out. Please try again.\n');
-              process.exit(1);
+            if (update.connection === 'open') {
+              paired = true;
+              console.log('✓ WhatsApp paired successfully!');
+              sock.end(undefined);
+              // Auto-restart daemon
+              const { getDaemonPid } = await import('./cli/helpers.js');
+              const pid = getDaemonPid();
+              if (pid) {
+                console.log('  Restarting daemon with WhatsApp enabled...');
+                const { execSync } = await import('node:child_process');
+                try {
+                  execSync('beecork stop', { stdio: 'ignore' });
+                  execSync('beecork start', { stdio: 'ignore' });
+                  console.log('  ✓ Daemon restarted.\n');
+                } catch {
+                  console.log('  Could not restart daemon. Run: beecork stop && beecork start\n');
+                }
+              } else {
+                console.log('  Start the daemon: beecork start\n');
+              }
+              process.exit(0);
             }
-            if (attempts >= maxAttempts) {
-              console.log(`\n✗ Could not connect after ${maxAttempts} attempts. Please try again later.\n`);
-              process.exit(1);
+            if (update.connection === 'close') {
+              if (paired) return; // Expected disconnect after pairing
+              // baileys' DisconnectError type isn't exported cleanly; this is the
+              // standard shape its error objects have.
+              const reason = (update.lastDisconnect?.error as { output?: { statusCode?: number } })
+                ?.output?.statusCode;
+              if (reason === DisconnectReason.loggedOut) {
+                console.log('\n✗ WhatsApp logged out. Please try again.\n');
+                process.exit(1);
+              }
+              if (attempts >= maxAttempts) {
+                console.log(
+                  `\n✗ Could not connect after ${maxAttempts} attempts. Please try again later.\n`,
+                );
+                process.exit(1);
+              }
+              setTimeout(connect, 3000);
             }
-            setTimeout(connect, 3000);
-          }
-        });
+          },
+        );
       };
 
       await connect();
@@ -356,7 +374,10 @@ program
     const readline = await import('node:readline');
     const crypto = await import('node:crypto');
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string, def?: string): Promise<string> => new Promise(r => rl.question(def ? `${q} [${def}]: ` : `${q}: `, a => r(a.trim() || def || '')));
+    const ask = (q: string, def?: string): Promise<string> =>
+      new Promise((r) =>
+        rl.question(def ? `${q} [${def}]: ` : `${q}: `, (a) => r(a.trim() || def || '')),
+      );
 
     console.log('\nWebhook Setup\n');
     console.log('  Webhooks let any service trigger Beecork via HTTP.');
@@ -372,7 +393,9 @@ program
     saveConfig(config);
     console.log(`\n✓ Webhook enabled on port ${port}`);
     console.log(`  Auth token: ${token}`);
-    console.log(`  Example: curl -X POST http://localhost:${port}/webhook/default -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"prompt":"hello"}'`);
+    console.log(
+      `  Example: curl -X POST http://localhost:${port}/webhook/default -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"prompt":"hello"}'`,
+    );
     console.log('\n  Restart daemon: beecork stop && beecork start\n');
     rl.close();
   });
@@ -461,7 +484,10 @@ program
     for (const [name, tmpl] of entries) {
       console.log(`  ${name}:`);
       if (tmpl.workingDir) console.log(`    workingDir: ${tmpl.workingDir}`);
-      if (tmpl.systemPrompt) console.log(`    systemPrompt: "${tmpl.systemPrompt.slice(0, 80)}${tmpl.systemPrompt.length > 80 ? '...' : ''}"`);
+      if (tmpl.systemPrompt)
+        console.log(
+          `    systemPrompt: "${tmpl.systemPrompt.slice(0, 80)}${tmpl.systemPrompt.length > 80 ? '...' : ''}"`,
+        );
     }
     console.log('');
   });
@@ -483,9 +509,7 @@ program
     await runDoctor();
   });
 
-const mcpCmd = program
-  .command('mcp')
-  .description('Manage MCP server configurations');
+const mcpCmd = program.command('mcp').description('Manage MCP server configurations');
 
 mcpCmd
   .command('add <name> <command> [args...]')
@@ -537,7 +561,8 @@ program
   .description('Show activity summary')
   .action(async (hours?: string) => {
     const h = parseInt(hours || '24');
-    const { getActivitySummary, formatActivitySummary } = await import('./observability/analytics.js');
+    const { getActivitySummary, formatActivitySummary } =
+      await import('./observability/analytics.js');
     console.log(formatActivitySummary(getActivitySummary(h)));
   });
 
@@ -631,7 +656,8 @@ program
   .command('knowledge [scope]')
   .description('List stored knowledge (global, project <path>, or all)')
   .action(async (scope?: string) => {
-    const { getGlobalKnowledge, getProjectKnowledge, getAllKnowledge, formatKnowledgeForContext } = await import('./knowledge/index.js');
+    const { getGlobalKnowledge, getProjectKnowledge, getAllKnowledge, formatKnowledgeForContext } =
+      await import('./knowledge/index.js');
     let entries;
     if (scope === 'global') {
       entries = getGlobalKnowledge();
@@ -648,9 +674,7 @@ program
     console.log(formatKnowledgeForContext(entries));
   });
 
-const storeCmd = program
-  .command('store')
-  .description('Browse and install community extensions');
+const storeCmd = program.command('store').description('Browse and install community extensions');
 
 storeCmd
   .command('search <query>')

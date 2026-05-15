@@ -39,10 +39,10 @@ export async function setupWizard(): Promise<void> {
     console.log('Checking prerequisites...\n');
     try {
       const version = execSync('claude --version 2>&1', { encoding: 'utf-8' }).trim();
-      console.log(`  \u2713 Claude Code found: ${version}`);
+      console.log(`  ✓ Claude Code found: ${version}`);
     } catch {
       claudeCodeMissing = true;
-      console.log('  \u2717 Claude Code is not installed yet.');
+      console.log('  ✗ Claude Code is not installed yet.');
       console.log('');
       console.log('    Claude Code is the AI brain that Beecork connects to.');
       console.log('    You need a Claude Pro or Max subscription ($20/month) from anthropic.com');
@@ -51,7 +51,9 @@ export async function setupWizard(): Promise<void> {
       console.log('    You can continue setup now and install Claude Code afterwards.');
       console.log('    Beecork will remind you at the end.');
       console.log('');
-      console.log('    Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites');
+      console.log(
+        '    Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites',
+      );
     }
     console.log('');
 
@@ -69,7 +71,9 @@ export async function setupWizard(): Promise<void> {
     console.log('  5. Choose a username ending in "bot" (e.g., "mybeecork_bot")');
     console.log('  6. BotFather will reply with a token — copy it');
     console.log('');
-    console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
+    console.log(
+      '  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n',
+    );
 
     let token = '';
     while (!token) {
@@ -81,12 +85,14 @@ export async function setupWizard(): Promise<void> {
 
       // Validate token by calling getMe
       try {
-        const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`, { signal: AbortSignal.timeout(10000) });
+        const resp = await fetch(`https://api.telegram.org/bot${token}/getMe`, {
+          signal: AbortSignal.timeout(10000),
+        });
         if (resp.ok) {
-          const data = await resp.json() as { result: { username: string } };
-          console.log(`  \u2713 Connected to bot: @${data.result.username}\n`);
+          const data = (await resp.json()) as { result: { username: string } };
+          console.log(`  ✓ Connected to bot: @${data.result.username}\n`);
         } else {
-          console.log('  \u2717 Invalid token. Please check and try again.\n');
+          console.log('  ✗ Invalid token. Please check and try again.\n');
           token = '';
         }
       } catch {
@@ -105,7 +111,9 @@ export async function setupWizard(): Promise<void> {
     console.log('  2. Tap "Start" and send it any message');
     console.log('  3. It replies with your user ID (a number like 123456789)');
     console.log('');
-    console.log('  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n');
+    console.log(
+      '  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n',
+    );
 
     const userIdStr = await ask(rl, 'Your Telegram user ID');
     const userId = parseInt(userIdStr, 10);
@@ -137,12 +145,10 @@ export async function setupWizard(): Promise<void> {
       },
       memory: {
         dbPath: '~/.beecork/memory.db',
-        maxLongTermEntries: 1000,
       },
       projectScanPaths: scanPaths,
       deployment: 'local',
     };
-
 
     // Write everything
     ensureBeecorkDirs();
@@ -186,7 +192,9 @@ export async function setupWizard(): Promise<void> {
       console.log('');
       console.log('     You also need a Claude Pro or Max subscription ($20/month).');
       console.log('     Sign up at: https://claude.ai');
-      console.log('     Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites');
+      console.log(
+        '     Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites',
+      );
       console.log('');
     }
 
@@ -213,8 +221,9 @@ export async function setupWizard(): Promise<void> {
     console.log('    beecork computer-use enable — mouse, keyboard, screen control');
     console.log('');
 
-    console.log('  Need help? https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n');
-
+    console.log(
+      '  Need help? https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n',
+    );
   } finally {
     rl.close();
   }
@@ -257,6 +266,5 @@ function generateMcpConfig(): void {
     },
   };
 
-  fs.writeFileSync(getMcpConfigPath(), JSON.stringify(mcpConfig, null, 2) + '\n');
+  fs.writeFileSync(getMcpConfigPath(), JSON.stringify(mcpConfig, null, 2) + '\n', { mode: 0o600 });
 }
-

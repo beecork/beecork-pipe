@@ -70,7 +70,11 @@ export function readRuntimeInfo(): RuntimeInfo | null {
 
 export function removeRuntimeInfo(): void {
   const filePath = getRuntimeInfoPath();
-  try { fs.unlinkSync(filePath); } catch { /* not present, fine */ }
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    /* not present, fine */
+  }
 }
 
 export function isPidAlive(pid: number): boolean {
@@ -89,7 +93,9 @@ export function isPidAlive(pid: number): boolean {
  */
 export function getServiceUnitPath(): string | null {
   const home = os.homedir();
-  if (process.platform === 'darwin') return path.join(home, 'Library', 'LaunchAgents', 'com.beecork.daemon.plist');
-  if (process.platform === 'linux') return path.join(home, '.config', 'systemd', 'user', 'beecork.service');
+  if (process.platform === 'darwin')
+    return path.join(home, 'Library', 'LaunchAgents', 'com.beecork.daemon.plist');
+  if (process.platform === 'linux')
+    return path.join(home, '.config', 'systemd', 'user', 'beecork.service');
   return null;
 }

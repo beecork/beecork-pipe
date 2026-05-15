@@ -82,9 +82,20 @@ export function autoHealInstall(fromFileUrl: string): HealResult {
     }
 
     if (rewroteUnit && signaledDaemon) {
-      return { action: 'rewrote-and-signaled', unitPath, oldDaemonScript: oldDaemonScript!, newDaemonScript: currentDaemonScript };
+      return {
+        action: 'rewrote-and-signaled',
+        unitPath,
+        oldDaemonScript: oldDaemonScript!,
+        newDaemonScript: currentDaemonScript,
+      };
     }
-    if (rewroteUnit) return { action: 'rewrote-unit', unitPath, oldDaemonScript: oldDaemonScript!, newDaemonScript: currentDaemonScript };
+    if (rewroteUnit)
+      return {
+        action: 'rewrote-unit',
+        unitPath,
+        oldDaemonScript: oldDaemonScript!,
+        newDaemonScript: currentDaemonScript,
+      };
     if (signaledDaemon) return { action: 'signaled-daemon', unitPath };
     return { action: 'noop' };
   } catch (err) {
@@ -101,24 +112,31 @@ export function autoHealInstall(fromFileUrl: string): HealResult {
  */
 export function extractDaemonScript(content: string): string | null {
   // launchd plist: pull the second <string> inside ProgramArguments
-  const launchdMatch = content.match(/<key>\s*ProgramArguments\s*<\/key>\s*<array>([\s\S]*?)<\/array>/);
+  const launchdMatch = content.match(
+    /<key>\s*ProgramArguments\s*<\/key>\s*<array>([\s\S]*?)<\/array>/,
+  );
   if (launchdMatch) {
-    const args = Array.from(launchdMatch[1].matchAll(/<string>([^<]+)<\/string>/g)).map(m => m[1]);
-    const jsArg = args.find(a => a.endsWith('daemon.js'));
+    const args = Array.from(launchdMatch[1].matchAll(/<string>([^<]+)<\/string>/g)).map(
+      (m) => m[1],
+    );
+    const jsArg = args.find((a) => a.endsWith('daemon.js'));
     if (jsArg) return jsArg;
   }
   // systemd unit: ExecStart=<node> <daemon.js> [args...]
   const systemdMatch = content.match(/^ExecStart\s*=\s*(.+)$/m);
   if (systemdMatch) {
     const parts = systemdMatch[1].split(/\s+/);
-    const jsArg = parts.find(p => p.endsWith('daemon.js'));
+    const jsArg = parts.find((p) => p.endsWith('daemon.js'));
     if (jsArg) return jsArg;
   }
   return null;
 }
 
 /** Rewrite-only variant used by tests and the postinstall hook in dry-run mode. */
-export function rewriteUnitDaemonScript(unitPath: string, newDaemonScript: string): { rewrote: boolean; oldDaemonScript: string | null } {
+export function rewriteUnitDaemonScript(
+  unitPath: string,
+  newDaemonScript: string,
+): { rewrote: boolean; oldDaemonScript: string | null } {
   if (!fs.existsSync(unitPath)) return { rewrote: false, oldDaemonScript: null };
   const content = fs.readFileSync(unitPath, 'utf-8');
   const oldDaemonScript = extractDaemonScript(content);

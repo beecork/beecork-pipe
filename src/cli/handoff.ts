@@ -1,35 +1,15 @@
 import { spawn } from 'node:child_process';
-import { getDb } from '../db/index.js';
 import { getConfig } from '../config.js';
-import { TabStore } from '../session/tab-store.js';
+import { exportTab, formatHandoffInfo, type TabHandoffInfo } from '../session/handoff.js';
 
-interface TabInfo {
-  name: string;
-  sessionId: string;
-  workingDir: string;
-  status: string;
-  lastActivity: string;
-  recentMessages: Array<{ role: string; content: string }>;
-}
+// Re-export the daemon-shared helpers so existing CLI callers keep working.
+export { exportTab, formatHandoffInfo, type TabHandoffInfo };
 
-export function exportTab(tabName: string): TabInfo | null {
-  const tab = TabStore.findByName(tabName);
-  if (!tab) return null;
-
-  const messages = getDb().prepare(
-    'SELECT role, content FROM messages WHERE tab_id = ? ORDER BY created_at DESC LIMIT 5'
-  ).all(tab.id) as Array<{ role: string; content: string }>;
-
-  return {
-    name: tab.name,
-    sessionId: tab.sessionId,
-    workingDir: tab.workingDir,
-    status: tab.status,
-    lastActivity: tab.lastActivityAt,
-    recentMessages: messages.reverse(),
-  };
-}
-
+/**
+ * CLI-only flow: print the handoff info, spawn claude with `--resume`, and
+ * inherit stdio so the user is dropped into an interactive session. Calls
+ * `process.exit` on subprocess exit — only safe from the CLI entry point.
+ */
 export function attachTab(tabName: string): void {
   const info = exportTab(tabName);
   if (!info) {
@@ -47,10 +27,7 @@ export function attachTab(tabName: string): void {
   console.log('');
 
   // Spawn Claude Code in the terminal, resuming the session
-  const child = spawn(bin, [
-    '--session-id', info.sessionId,
-    '--resume',
-  ], {
+  const child = spawn(bin, ['--session-id', info.sessionId, '--resume'], {
     cwd: info.workingDir,
     stdio: 'inherit', // Attach to terminal
     env: { ...process.env },
@@ -59,31 +36,4 @@ export function attachTab(tabName: string): void {
   child.on('exit', (code) => {
     process.exit(code ?? 0);
   });
-}
-
-export function formatHandoffInfo(info: TabInfo): string {
-  const lines = [
-    `Session Handoff — tab "${info.name}"`,
-    '',
-    `Session ID: ${info.sessionId}`,
-    `Working dir: ${info.workingDir}`,
-    `Status: ${info.status}`,
-    `Last activity: ${info.lastActivity}`,
-    '',
-    'To resume in terminal:',
-    `  beecork attach ${info.name}`,
-    '',
-    'Or manually:',
-    `  cd ${info.workingDir}`,
-    `  claude --session-id ${info.sessionId} --resume`,
-  ];
-
-  if (info.recentMessages.length > 0) {
-    lines.push('', 'Recent context:');
-    for (const msg of info.recentMessages) {
-      lines.push(`  [${msg.role}] ${msg.content.slice(0, 150)}${msg.content.length > 150 ? '...' : ''}`);
-    }
-  }
-
-  return lines.join('\n');
 }

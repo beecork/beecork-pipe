@@ -6,7 +6,8 @@ const TASK_NAME = 'BeecorkDaemon';
 
 /** Install Beecork as a Windows Task Scheduler task */
 export function installWindowsService(binPath: string): void {
-  const appData = process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
+  const appData =
+    process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
   const logPath = path.join(appData, '.beecork', 'logs', 'daemon.log');
 
   // Ensure log directory exists
@@ -35,7 +36,7 @@ export function startWindowsService(): void {
   try {
     execSync(`schtasks /Run /TN "${TASK_NAME}"`, { stdio: 'inherit' });
     console.log('Beecork daemon started.');
-  } catch (err) {
+  } catch {
     console.error('Failed to start. Run manually: beecork daemon');
   }
 }
@@ -62,4 +63,3 @@ export function uninstallWindowsService(): void {
     console.error('Failed to uninstall service.');
   }
 }
-

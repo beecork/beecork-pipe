@@ -11,11 +11,20 @@ import type { Task } from '../types.js';
 
 export const execAsync = promisify(exec);
 
+/**
+ * Disable a task after this many consecutive failures so a misconfigured
+ * cron doesn't fire (and notify) every interval indefinitely. Reset on
+ * success.
+ */
+const MAX_CONSECUTIVE_FAILURES = 5;
+
 export class TaskScheduler {
   // taskId -> due time in ms epoch
   private nextRunAt: Map<string, number> = new Map();
   // taskIds with an in-flight fireJob
   private running: Set<string> = new Set();
+  // taskId -> consecutive failure count, used for auto-disable
+  private failureCounts: Map<string, number> = new Map();
   private stopping = false;
   private store = new TaskStore();
 
@@ -42,7 +51,9 @@ export class TaskScheduler {
       if (job.scheduleType === 'at' && !job.lastRunAt) {
         const targetTime = new Date(job.schedule).getTime();
         if (Number.isFinite(targetTime) && targetTime <= Date.now()) {
-          logger.warn(`Task: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`);
+          logger.warn(
+            `Task: missed fire detected for "${job.name}" (was scheduled for ${job.schedule}), firing now`,
+          );
           missedFires++;
           this.store.update(job.id, { enabled: false, nextRunAt: null });
           void this.fireJob(job);
@@ -67,14 +78,20 @@ export class TaskScheduler {
       scheduled++;
     }
 
-    logger.info(`Tasks: loaded ${scheduled} active tasks (${jobs.length} total)${missedFires > 0 ? `, fired ${missedFires} missed` : ''}`);
+    logger.info(
+      `Tasks: loaded ${scheduled} active tasks (${jobs.length} total)${missedFires > 0 ? `, fired ${missedFires} missed` : ''}`,
+    );
   }
 
   /** Check for the reload signal file and reload if present */
   checkForReload(): void {
     const signalPath = getCronReloadSignalPath();
     if (fs.existsSync(signalPath)) {
-      try { fs.unlinkSync(signalPath); } catch { /* race condition, ok */ }
+      try {
+        fs.unlinkSync(signalPath);
+      } catch {
+        /* race condition, ok */
+      }
       logger.info('Tasks: reload signal detected, reloading schedules');
       this.loadAndSchedule();
     }
@@ -131,11 +148,15 @@ export class TaskScheduler {
     try {
       switch (job.scheduleType) {
         case 'cron':
-          return CronExpressionParser.parse(job.schedule, { currentDate: new Date(fromMs) }).next().getTime();
+          return CronExpressionParser.parse(job.schedule, { currentDate: new Date(fromMs) })
+            .next()
+            .getTime();
         case 'every': {
           const expr = intervalToCron(job.schedule);
           if (expr) {
-            return CronExpressionParser.parse(expr, { currentDate: new Date(fromMs) }).next().getTime();
+            return CronExpressionParser.parse(expr, { currentDate: new Date(fromMs) })
+              .next()
+              .getTime();
           }
           const ms = intervalToMs(job.schedule);
           return ms ? fromMs + ms : null;
@@ -152,7 +173,9 @@ export class TaskScheduler {
   }
 
   private async fireJob(job: Task): Promise<void> {
-    logger.info(`Task firing: "${job.name}" (${job.payloadType || 'agentTurn'}) -> tab:${job.tabName}`);
+    logger.info(
+      `Task firing: "${job.name}" (${job.payloadType || 'agentTurn'}) -> tab:${job.tabName}`,
+    );
     const logFile = path.join(getLogsDir(), `task-${job.name}.log`);
 
     // Handle systemEvent -- internal Beecork actions, not Claude Code
@@ -160,7 +183,10 @@ export class TaskScheduler {
       try {
         await this.handleSystemEvent(job);
         this.store.update(job.id, { lastRunAt: new Date().toISOString() });
-        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] SYSTEM: ${job.message}\n`);
+        await fs.promises.appendFile(
+          logFile,
+          `[${new Date().toISOString()}] SYSTEM: ${job.message}\n`,
+        );
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         logger.error(`System event "${job.name}" failed:`, err);
@@ -179,7 +205,16 @@ export class TaskScheduler {
       const status = result.error ? 'ERROR' : 'SUCCESS';
 
       // Log result (status reflects subprocess exit / is_error, not just completion)
-      await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ${status}: ${firstLine}\n`);
+      await fs.promises.appendFile(
+        logFile,
+        `[${new Date().toISOString()}] ${status}: ${firstLine}\n`,
+      );
+
+      if (result.error) {
+        this.recordFailure(job);
+      } else {
+        this.failureCounts.delete(job.id);
+      }
 
       // Notify (separate try/catch -- notification failure shouldn't be reported as job failure)
       try {
@@ -198,9 +233,33 @@ export class TaskScheduler {
       logger.error(`Task "${job.name}" failed:`, err);
       await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] ERROR: ${errMsg}\n`);
 
+      this.recordFailure(job);
+
       try {
         await this.onNotify?.(`[${job.name}] Failed -- ${errMsg}`);
-      } catch { /* notification best-effort */ }
+      } catch {
+        /* notification best-effort */
+      }
+    }
+  }
+
+  /**
+   * Track consecutive failures per task. After MAX_CONSECUTIVE_FAILURES the
+   * task is auto-disabled in the DB and a single "auto-disabled" notification
+   * is sent. Counter resets on the next successful fire.
+   */
+  private recordFailure(job: Task): void {
+    const count = (this.failureCounts.get(job.id) ?? 0) + 1;
+    this.failureCounts.set(job.id, count);
+    if (count >= MAX_CONSECUTIVE_FAILURES) {
+      logger.warn(`Task "${job.name}" hit ${count} consecutive failures — auto-disabling`);
+      this.store.update(job.id, { enabled: false });
+      this.nextRunAt.delete(job.id);
+      this.failureCounts.delete(job.id);
+      // Notify once. Subsequent enable + re-failure will trigger again.
+      this.onNotify?.(
+        `Task "${job.name}" auto-disabled after ${count} consecutive failures. Re-enable from the dashboard or via beecork_task_update.`,
+      ).catch(() => {});
     }
   }
 
@@ -219,9 +278,11 @@ export class TaskScheduler {
 }
 
 /** Parse a "1w2d3h45m"-style interval into its parts. Returns null on invalid input. */
-function parseInterval(interval: string): { weeks: number; days: number; hours: number; mins: number } | null {
+function parseInterval(
+  interval: string,
+): { weeks: number; days: number; hours: number; mins: number } | null {
   const match = interval.match(/^(?:(\d+)w)?(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/);
-  if (!match || match.slice(1).every(g => g === undefined)) return null;
+  if (!match || match.slice(1).every((g) => g === undefined)) return null;
   return {
     weeks: parseInt(match[1] || '0', 10),
     days: parseInt(match[2] || '0', 10),
@@ -235,7 +296,7 @@ export function intervalToMs(interval: string): number | null {
   const parts = parseInterval(interval);
   if (!parts) return null;
   const { weeks, days, hours, mins } = parts;
-  const totalMs = ((weeks * 7 * 24 * 60) + (days * 24 * 60) + (hours * 60) + mins) * 60 * 1000;
+  const totalMs = (weeks * 7 * 24 * 60 + days * 24 * 60 + hours * 60 + mins) * 60 * 1000;
   return totalMs > 0 ? totalMs : null;
 }
 
@@ -252,7 +313,8 @@ export function intervalToCron(interval: string): string | null {
   // Simple minute interval
   if (totalMins <= 59) return `*/${totalMins} * * * *`;
   // Hourly intervals
-  if (mins === 0 && days === 0 && weeks === 0 && hours > 0 && hours <= 23) return `0 */${hours} * * *`;
+  if (mins === 0 && days === 0 && weeks === 0 && hours > 0 && hours <= 23)
+    return `0 */${hours} * * *`;
   // Daily intervals
   if (mins === 0 && hours === 0 && weeks === 0 && days > 0) return `0 0 */${days} * *`;
   // Weekly intervals

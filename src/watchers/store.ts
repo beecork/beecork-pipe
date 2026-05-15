@@ -38,7 +38,9 @@ function rowToWatcher(row: WatcherRow): Watcher {
 export class WatcherStore {
   list(): Watcher[] {
     const db = getDb();
-    return (db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as WatcherRow[]).map(rowToWatcher);
+    return (db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as WatcherRow[]).map(
+      rowToWatcher,
+    );
   }
 
   get(id: string): Watcher | undefined {
@@ -47,14 +49,25 @@ export class WatcherStore {
     return row ? rowToWatcher(row) : undefined;
   }
 
-  create(watcher: Omit<Watcher, 'lastCheckAt' | 'lastTriggeredAt' | 'triggerCount' | 'enabled' | 'createdAt'>): void {
+  create(
+    watcher: Omit<
+      Watcher,
+      'lastCheckAt' | 'lastTriggeredAt' | 'triggerCount' | 'enabled' | 'createdAt'
+    >,
+  ): void {
     const db = getDb();
     db.prepare(
       `INSERT INTO watchers (id, name, description, check_command, condition, action, action_details, schedule)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
-      watcher.id, watcher.name, watcher.description, watcher.checkCommand,
-      watcher.condition, watcher.action, watcher.actionDetails, watcher.schedule,
+      watcher.id,
+      watcher.name,
+      watcher.description,
+      watcher.checkCommand,
+      watcher.condition,
+      watcher.action,
+      watcher.actionDetails,
+      watcher.schedule,
     );
   }
 
@@ -65,10 +78,17 @@ export class WatcherStore {
 
     const merged = { ...existing, ...fields };
     db.prepare(
-      `UPDATE watchers SET name=?, description=?, check_command=?, condition=?, action=?, action_details=?, schedule=?, enabled=? WHERE id=?`
+      `UPDATE watchers SET name=?, description=?, check_command=?, condition=?, action=?, action_details=?, schedule=?, enabled=? WHERE id=?`,
     ).run(
-      merged.name, merged.description, merged.checkCommand, merged.condition,
-      merged.action, merged.actionDetails, merged.schedule, merged.enabled ? 1 : 0, id,
+      merged.name,
+      merged.description,
+      merged.checkCommand,
+      merged.condition,
+      merged.action,
+      merged.actionDetails,
+      merged.schedule,
+      merged.enabled ? 1 : 0,
+      id,
     );
     return true;
   }
@@ -81,13 +101,16 @@ export class WatcherStore {
 
   markChecked(id: string): void {
     const db = getDb();
-    db.prepare('UPDATE watchers SET last_check_at = ? WHERE id = ?').run(new Date().toISOString(), id);
+    db.prepare('UPDATE watchers SET last_check_at = ? WHERE id = ?').run(
+      new Date().toISOString(),
+      id,
+    );
   }
 
   markTriggered(id: string): void {
     const db = getDb();
     db.prepare(
-      'UPDATE watchers SET last_triggered_at = ?, trigger_count = trigger_count + 1 WHERE id = ?'
+      'UPDATE watchers SET last_triggered_at = ?, trigger_count = trigger_count + 1 WHERE id = ?',
     ).run(new Date().toISOString(), id);
   }
 }

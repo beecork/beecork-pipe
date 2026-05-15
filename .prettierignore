@@ -1,3 +1,11 @@
 dist/
 node_modules/
+coverage/
+audits/
+site/
+*.lock
+package-lock.json
+# Inline HTML+CSS+JS template — Prettier's HTML formatter clashes with the
+# template-literal embedding pattern.
+src/dashboard/html.ts
 *.md

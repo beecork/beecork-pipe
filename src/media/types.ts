@@ -22,3 +22,23 @@ export interface MediaGenerator {
   readonly supportedTypes: MediaType[];
   generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult>;
 }
+
+// ─── Shared API response shapes for media generators ───
+// Pulled here so multiple generators (lyria, nano-banana, recraft, etc.) can
+// share the same response interface instead of each casting to `any`.
+
+/** Gemini `:generateContent` response shape (used by lyria + nano-banana). */
+export interface GeminiInlineDataPart {
+  inlineData?: { mimeType?: string; data: string };
+}
+export interface GeminiCandidate {
+  content?: { parts?: GeminiInlineDataPart[] };
+}
+export interface GeminiGenerateContentResponse {
+  candidates?: GeminiCandidate[];
+}
+
+/** Recraft `/v1/images/generations` response. */
+export interface RecraftGenerateResponse {
+  data?: Array<{ url?: string; b64_json?: string }>;
+}

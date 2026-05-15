@@ -10,15 +10,17 @@ const GLOBAL_CATEGORIES = ['people', 'preferences', 'routines', 'general'];
 
 /** Ensure global knowledge directory exists */
 function ensureGlobalDir(): void {
-  fs.mkdirSync(GLOBAL_KNOWLEDGE_DIR, { recursive: true });
+  fs.mkdirSync(GLOBAL_KNOWLEDGE_DIR, { recursive: true, mode: 0o700 });
 }
 
 const knowledgeCache = new Map<string, { content: string; mtime: number }>();
 
 /** Read a knowledge file with mtime-based caching, return content or empty string */
 function readKnowledgeCached(filePath: string): string {
+  // Skip the existsSync precheck — fs.statSync throws ENOENT on missing files,
+  // catching that gets us the same fall-through. This halves the syscall count
+  // on every Claude message that triggers knowledge injection.
   try {
-    if (!fs.existsSync(filePath)) return '';
     const stat = fs.statSync(filePath);
     const cached = knowledgeCache.get(filePath);
     if (cached && cached.mtime === stat.mtimeMs) return cached.content;
@@ -26,6 +28,7 @@ function readKnowledgeCached(filePath: string): string {
     knowledgeCache.set(filePath, { content, mtime: stat.mtimeMs });
     return content;
   } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return '';
     logger.warn(`Failed to read knowledge file ${filePath}:`, err);
     return '';
   }
@@ -33,10 +36,15 @@ function readKnowledgeCached(filePath: string): string {
 
 /** Append to a knowledge file */
 function appendToFile(filePath: string, content: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const existing = readKnowledgeCached(filePath);
   const separator = existing.endsWith('\n') || existing === '' ? '' : '\n';
-  fs.writeFileSync(filePath, existing + separator + content + '\n');
+  fs.writeFileSync(filePath, existing + separator + content + '\n', { mode: 0o600 });
+  try {
+    fs.chmodSync(filePath, 0o600);
+  } catch {
+    /* not fatal */
+  }
 }
 
 // ─── Layer 1: Global Knowledge ───
@@ -81,10 +89,10 @@ export function addProjectKnowledge(projectPath: string, content: string): void 
 
 export function getTabKnowledge(tabName: string): KnowledgeEntry[] {
   const db = getDb();
-  const rows = db.prepare(
-    'SELECT content FROM memories WHERE tab_name = ? ORDER BY created_at DESC LIMIT 50'
-  ).all(tabName) as Array<{ content: string }>;
-  return rows.map(r => ({ content: r.content, scope: 'tab' as const, source: tabName }));
+  const rows = db
+    .prepare('SELECT content FROM memories WHERE tab_name = ? ORDER BY created_at DESC LIMIT 50')
+    .all(tabName) as Array<{ content: string }>;
+  return rows.map((r) => ({ content: r.content, scope: 'tab' as const, source: tabName }));
 }
 
 // ─── Combined Knowledge ───
@@ -114,7 +122,7 @@ export function formatKnowledgeForContext(entries: KnowledgeEntry[]): string {
 
   const sections: string[] = [];
 
-  const global = entries.filter(e => e.scope === 'global');
+  const global = entries.filter((e) => e.scope === 'global');
   if (global.length > 0) {
     sections.push('[Your knowledge (global)]');
     for (const entry of global) {
@@ -123,7 +131,7 @@ export function formatKnowledgeForContext(entries: KnowledgeEntry[]): string {
     }
   }
 
-  const project = entries.filter(e => e.scope === 'project');
+  const project = entries.filter((e) => e.scope === 'project');
   if (project.length > 0) {
     sections.push('\n[Project knowledge]');
     for (const entry of project) {
@@ -131,7 +139,7 @@ export function formatKnowledgeForContext(entries: KnowledgeEntry[]): string {
     }
   }
 
-  const tab = entries.filter(e => e.scope === 'tab');
+  const tab = entries.filter((e) => e.scope === 'tab');
   if (tab.length > 0) {
     sections.push('\n[Context from memory]');
     for (const entry of tab) {
@@ -143,11 +151,15 @@ export function formatKnowledgeForContext(entries: KnowledgeEntry[]): string {
 }
 
 /** Add knowledge to the right scope */
-export function addKnowledge(content: string, scope: KnowledgeScope, options?: {
-  projectPath?: string;
-  tabName?: string;
-  category?: string;
-}): void {
+export function addKnowledge(
+  content: string,
+  scope: KnowledgeScope,
+  options?: {
+    projectPath?: string;
+    tabName?: string;
+    category?: string;
+  },
+): void {
   switch (scope) {
     case 'global':
       addGlobalKnowledge(content, options?.category);
@@ -157,10 +169,15 @@ export function addKnowledge(content: string, scope: KnowledgeScope, options?: {
       addProjectKnowledge(options.projectPath, content);
       break;
     case 'tab': {
-      // Use existing memory system
+      // Use existing memory system. Inline INSERT here (rather than the
+      // MemoryStore wrapper) because knowledge → session would invert the
+      // module dep direction; the schema duplication is one column list and
+      // the shape is stable.
       const db = getDb();
       db.prepare('INSERT INTO memories (content, tab_name, source) VALUES (?, ?, ?)').run(
-        content, options?.tabName || null, 'tool'
+        content,
+        options?.tabName || null,
+        'tool',
       );
       break;
     }
@@ -168,8 +185,12 @@ export function addKnowledge(content: string, scope: KnowledgeScope, options?: {
 }
 
 /** Search knowledge across all layers */
-export function searchKnowledge(query: string, projectPath?: string, tabName?: string): KnowledgeEntry[] {
+export function searchKnowledge(
+  query: string,
+  projectPath?: string,
+  tabName?: string,
+): KnowledgeEntry[] {
   const all = getAllKnowledge(projectPath, tabName);
   const lower = query.toLowerCase();
-  return all.filter(e => e.content.toLowerCase().includes(lower));
+  return all.filter((e) => e.content.toLowerCase().includes(lower));
 }

@@ -1,9 +1,14 @@
 import { v4 as uuidv4 } from 'uuid';
-import type Database from 'better-sqlite3';
 import { ClaudeSubprocess, type SubprocessCallbacks } from './subprocess.js';
 import { CircuitBreaker, type CircuitBreakerAction } from './circuit-breaker.js';
 import { ContextMonitor, type ContextAction } from './context-monitor.js';
 import { TabStore } from './tab-store.js';
+import { MessageQueue } from './message-queue.js';
+import { BudgetGuard } from './budget-guard.js';
+import { StaleSessionDetector } from './stale-session.js';
+import { ContextCompactor } from './context-compactor.js';
+import { PendingMessageStore } from './pending-store.js';
+import { completeDelegation } from '../delegation/manager.js';
 import { getDb } from '../db/index.js';
 import { resolveWorkingDir, validateTabName } from '../config.js';
 import { logger } from '../util/logger.js';
@@ -20,8 +25,7 @@ import type {
   StreamContentToolUse,
 } from '../types.js';
 
-// TabRow + rowToTab moved to ./tab-store.ts — this file now uses TabStore for all
-// pure tab queries and owns only the subprocess lifecycle.
+export type { StreamResult } from '../types.js';
 
 export interface SendResult {
   text: string;
@@ -31,18 +35,36 @@ export interface SendResult {
   error: boolean;
 }
 
-const MAX_QUEUE_SIZE = 10;
-let pendingPollCount = 0;
-
 export type NotifyCallback = (text: string) => Promise<void>;
 
+/**
+ * TabManager orchestrates per-tab Claude subprocess lifecycles. Heavy lifting
+ * (queueing, budget enforcement, stale-session recovery, context compaction,
+ * pending-message dispatch) is delegated to collaborators in this directory
+ * so this class stays focused on:
+ *
+ *   - tab CRUD (ensureTab, listTabs, stopTab, closeTab, stopAll)
+ *   - subprocess orchestration (executeMessage)
+ *   - wiring the collaborators together
+ *
+ * The split happened in the 2026-05-15 audit fix; see the audit file for the
+ * rationale. Before the split this file was 467 lines and 10 responsibilities.
+ */
 export class TabManager {
   private subprocesses: Map<string, ClaudeSubprocess> = new Map();
-  private circuitBreakers: Map<string, CircuitBreaker> = new Map();
-  private messageQueues: Map<string, Array<{ prompt: string; resolve: (r: SendResult) => void; reject: (e: Error) => void }>> = new Map();
+  private queue = new MessageQueue();
+  private budget: BudgetGuard;
+  // In-memory cache of per-tab cumulative cost. Lazily seeded with a single
+  // SUM query when a tab is first checked; thereafter updated incrementally
+  // from the assistant-message insert. Saves an O(N messages) SUM scan on
+  // every inbound message — the previous code re-aggregated the entire tab
+  // history just to gate budget.
+  private tabCostCache: Map<string, number> = new Map();
   private onNotify: NotifyCallback | null = null;
 
-  constructor(private config: BeecorkConfig) {}
+  constructor(private config: BeecorkConfig) {
+    this.budget = new BudgetGuard(config.claudeCode.maxBudgetUsd);
+  }
 
   /** Set a callback for sending notifications (e.g., via Telegram) */
   setNotifyCallback(cb: NotifyCallback): void {
@@ -52,7 +74,7 @@ export class TabManager {
   /** Ensure a tab exists in the database. Creates it if missing. */
   ensureTab(tabName: string, workingDirOverride?: string): Tab {
     const db = getDb();
-    const existing = this.queryTab(db, tabName);
+    const existing = TabStore.findByName(tabName);
     if (existing) return existing;
 
     // Validate tab name before creating (centralized for all channels + MCP)
@@ -76,35 +98,60 @@ export class TabManager {
       systemPrompt: template?.systemPrompt || null,
     };
 
-    db.prepare(`
+    db.prepare(
+      `
       INSERT INTO tabs (id, name, session_id, status, working_dir, created_at, last_activity_at, system_prompt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(tab.id, tab.name, tab.sessionId, tab.status, tab.workingDir, tab.createdAt, tab.lastActivityAt, tab.systemPrompt);
+    `,
+    ).run(
+      tab.id,
+      tab.name,
+      tab.sessionId,
+      tab.status,
+      tab.workingDir,
+      tab.createdAt,
+      tab.lastActivityAt,
+      tab.systemPrompt,
+    );
 
     logger.info(`Created tab: ${tabName}`);
     return tab;
   }
 
   /** Send a message to a tab. Creates the tab if it doesn't exist. Queues if busy. */
-  async sendMessage(tabName: string, prompt: string, options?: { resume?: boolean; onTextChunk?: (text: string) => void; onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void; projectPath?: string; _compactionDepth?: number }): Promise<SendResult> {
+  async sendMessage(
+    tabName: string,
+    prompt: string,
+    options?: {
+      resume?: boolean;
+      onTextChunk?: (text: string) => void;
+      onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void;
+      projectPath?: string;
+      _compactionDepth?: number;
+    },
+  ): Promise<SendResult> {
     const tab = this.ensureTab(tabName, options?.projectPath);
 
     // If a subprocess is already running on this tab, queue the message
     if (this.subprocesses.get(tabName)?.isRunning) {
-      const queue = this.messageQueues.get(tabName) ?? [];
-      if (queue.length >= MAX_QUEUE_SIZE) {
-        return Promise.reject(new Error(`Queue full for tab "${tabName}" (max ${MAX_QUEUE_SIZE}). Try again later.`));
-      }
       return new Promise((resolve, reject) => {
-        if (!this.messageQueues.has(tabName)) {
-          this.messageQueues.set(tabName, []);
+        const accepted = this.queue.enqueue(tabName, { prompt, resolve, reject });
+        if (!accepted) {
+          reject(new Error(`Queue full for tab "${tabName}". Try again later.`));
+          return;
         }
-        this.messageQueues.get(tabName)!.push({ prompt, resolve, reject });
-        logger.info(`[${tabName}] Message queued (queue size: ${this.messageQueues.get(tabName)!.length})`);
+        logger.info(`[${tabName}] Message queued (queue size: ${this.queue.size(tabName)})`);
       });
     }
 
-    return this.executeMessage(tab, prompt, options?.resume ?? false, options?.onTextChunk, options?.onToolUse, options?._compactionDepth);
+    return this.executeMessage(
+      tab,
+      prompt,
+      options?.resume ?? false,
+      options?.onTextChunk,
+      options?.onToolUse,
+      options?._compactionDepth,
+    );
   }
 
   /** Get all tabs from the database */
@@ -117,16 +164,10 @@ export class TabManager {
     return TabStore.findByName(tabName);
   }
 
-  private queryTab(_db: Database.Database, tabName: string): Tab | undefined {
-    return TabStore.findByName(tabName);
-  }
-
   /** Stop a tab's running subprocess */
   stopTab(tabName: string): void {
     const sub = this.subprocesses.get(tabName);
-    if (sub?.isRunning) {
-      sub.kill();
-    }
+    if (sub?.isRunning) sub.kill();
     this.updateTabStatus(tabName, 'stopped');
     this.clearQueue(tabName);
   }
@@ -138,77 +179,69 @@ export class TabManager {
 
   /** Close a tab — stop subprocess and delete its rows. Returns true if the tab existed. */
   closeTab(tabName: string): boolean {
+    const tab = TabStore.findByName(tabName);
     this.stopTab(tabName);
+    if (tab) this.tabCostCache.delete(tab.id);
     return TabStore.deleteWithMessages(tabName);
   }
 
   /** Stop all running subprocesses (clean shutdown) */
   stopAll(): void {
     for (const [tabName, sub] of this.subprocesses) {
-      if (sub.isRunning) {
-        sub.kill();
-      }
+      if (sub.isRunning) sub.kill();
       this.updateTabStatus(tabName, 'stopped');
     }
     this.subprocesses.clear();
-    this.circuitBreakers.clear();
-    this.messageQueues.clear();
-  }
-
-  /** Process pending messages from MCP server IPC */
-  processPendingMessages(): void {
-    const db = getDb();
-
-    // Periodic cleanup: delete old processed messages every ~100 polls (~8 minutes at 5s interval)
-    pendingPollCount++;
-    if (pendingPollCount % 100 === 0) {
-      db.prepare("DELETE FROM pending_messages WHERE processed = 1 AND created_at < datetime('now', '-1 day')").run();
-    }
-
-    const pending = db.prepare(
-      'SELECT * FROM pending_messages WHERE processed = 0 ORDER BY created_at ASC LIMIT 50'
-    ).all() as Array<{ id: number; tab_name: string; message: string; type?: string }>;
-
-    if (pending.length === 0) return;
-
-    const markProcessed = db.prepare('UPDATE pending_messages SET processed = 1 WHERE id = ?');
-
-    for (const msg of pending) {
-      // Mark processed AFTER delivery resolves (success OR failure) so a crash
-      // mid-loop doesn't leave the row both unprocessed in the DB and dropped
-      // from the in-memory iteration. Failures still mark processed — we don't
-      // want infinite retries — but the failure path also logs and notifies.
-      if (msg.type === 'notification') {
-        this.onNotify?.(msg.message)
-          .catch(err => logger.warn('Notify failed:', err))
-          .finally(() => markProcessed.run(msg.id));
-      } else {
-        this.sendMessage(msg.tab_name, msg.message)
-          .catch(err => {
-            logger.error(`Failed to process pending message for tab ${msg.tab_name}:`, err);
-            this.onNotify?.(`Pending message for tab "${msg.tab_name}" failed: ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
-          })
-          .finally(() => markProcessed.run(msg.id));
+    for (const dropped of this.queue.clearAll()) {
+      for (const item of dropped) {
+        item.reject(new Error('Daemon shutting down'));
       }
     }
   }
 
-  private async executeMessage(tab: Tab, prompt: string, resume: boolean, onTextChunk?: (text: string) => void, onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void, compactionDepth?: number, forceFresh: boolean = false, retryDepth: number = 0): Promise<SendResult> {
+  private async executeMessage(
+    tab: Tab,
+    prompt: string,
+    resume: boolean,
+    onTextChunk?: (text: string) => void,
+    onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void,
+    compactionDepth?: number,
+    forceFresh: boolean = false,
+    retryDepth: number = 0,
+  ): Promise<SendResult> {
     const db = getDb();
 
-    logActivity('task_started', 'Processing message', { tabName: tab.name, details: prompt.slice(0, 500) });
+    logActivity('task_started', 'Processing message', {
+      tabName: tab.name,
+      details: prompt.slice(0, 500),
+    });
 
     // Budget check before spawning
     if (this.config.claudeCode.maxBudgetUsd) {
-      const tabSpend = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE tab_id = ?').get(tab.id) as { total: number }).total;
-      if (tabSpend >= this.config.claudeCode.maxBudgetUsd) {
-        const msg = `Budget limit reached for tab "${tab.name}": $${tabSpend.toFixed(2)} / $${this.config.claudeCode.maxBudgetUsd.toFixed(2)}`;
-        this.onNotify?.(msg).catch(() => {});
-        return { text: msg, costUsd: 0, durationMs: 0, sessionId: tab.sessionId, error: true };
+      let tabSpend = this.tabCostCache.get(tab.id);
+      if (tabSpend === undefined) {
+        tabSpend = (
+          db
+            .prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE tab_id = ?')
+            .get(tab.id) as {
+            total: number;
+          }
+        ).total;
+        this.tabCostCache.set(tab.id, tabSpend);
       }
-      // Warn at 80%
-      if (tabSpend >= this.config.claudeCode.maxBudgetUsd * 0.8) {
-        this.onNotify?.(`⚠️ Budget warning: tab "${tab.name}" at $${tabSpend.toFixed(2)} / $${this.config.claudeCode.maxBudgetUsd.toFixed(2)} (80%)`).catch(() => {});
+      const decision = this.budget.check(tabSpend, tab.name);
+      if (!decision.allowed) {
+        this.onNotify?.(decision.reason!).catch(() => {});
+        return {
+          text: decision.reason!,
+          costUsd: 0,
+          durationMs: 0,
+          sessionId: tab.sessionId,
+          error: true,
+        };
+      }
+      if (decision.warning) {
+        this.onNotify?.(decision.warning).catch(() => {});
       }
     }
 
@@ -218,13 +251,16 @@ export class TabManager {
     const enrichedPrompt = knowledgeContext ? `${knowledgeContext}\n\n${prompt}` : prompt;
 
     // Store user message
-    db.prepare('INSERT INTO messages (tab_id, role, content) VALUES (?, ?, ?)')
-      .run(tab.id, 'user', prompt);
+    db.prepare('INSERT INTO messages (tab_id, role, content) VALUES (?, ?, ?)').run(
+      tab.id,
+      'user',
+      prompt,
+    );
 
     this.updateTabStatus(tab.name, 'running');
 
     // Get fresh tab to pick up system_prompt
-    const freshTab = this.queryTab(db, tab.name) || tab;
+    const freshTab = TabStore.findByName(tab.name) || tab;
 
     const subprocess = new ClaudeSubprocess(
       tab.name,
@@ -235,22 +271,34 @@ export class TabManager {
     );
     this.subprocesses.set(tab.name, subprocess);
 
+    // Circuit breaker is per-call state — its lifetime is exactly the
+    // subprocess's lifetime. Keep it as a local const; the previous
+    // circuitBreakers Map suggested cross-call state but nothing read it
+    // outside this scope.
     const breaker = new CircuitBreaker(tab.name);
-    this.circuitBreakers.set(tab.name, breaker);
     const contextMonitor = new ContextMonitor(tab.name);
 
     // Resume if: explicitly requested or DB has prior successful responses for this tab.
     // forceFresh overrides both — used after a stale-session retry to guarantee --session-id, not --resume.
-    const hasDbHistory = db.prepare(
-      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ? AND content != ?'
-    ).get(tab.id, 'assistant', '') as { count: number };
-    const shouldResume = !forceFresh && (resume || hasDbHistory.count > 0);
+    // LIMIT 1 short-circuits on the first matching row — a long-running tab with
+    // 10k messages used to walk the whole index for a boolean answer.
+    const hasDbHistory =
+      db
+        .prepare(
+          "SELECT 1 FROM messages WHERE tab_id = ? AND role = 'assistant' AND content != '' LIMIT 1",
+        )
+        .get(tab.id) !== undefined;
+    const shouldResume = !forceFresh && (resume || hasDbHistory);
 
     return new Promise<SendResult>((resolve, reject) => {
       let resultText = '';
       let resultEvent: StreamResult | null = null;
       let loopWarningPending = false;
       let checkpointTriggered = false;
+      // Prevent the SIGTERM-then-exit double dispatch: when onError already
+      // routed the failure through reject() + processNextInQueue, suppress
+      // the inevitable subsequent onExit so the queue doesn't shift twice.
+      let errored = false;
 
       const callbacks: SubprocessCallbacks = {
         onEvent: (event: StreamEvent) => {
@@ -258,8 +306,10 @@ export class TabManager {
           if (event.type === 'system' && 'subtype' in event && event.subtype === 'init') {
             const initEvent = event as StreamInit;
             if (initEvent.session_id) {
-              db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?')
-                .run(initEvent.session_id, tab.id);
+              db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(
+                initEvent.session_id,
+                tab.id,
+              );
             }
           }
 
@@ -267,9 +317,10 @@ export class TabManager {
             const assistant = event as StreamAssistant;
             // Track context usage
             if (assistant.message.usage) {
-              const contextAction: ContextAction = contextMonitor.recordUsage(assistant.message.usage);
+              const contextAction: ContextAction = contextMonitor.recordUsage(
+                assistant.message.usage,
+              );
               if (contextAction === 'warn') {
-                // Will inject warning on next message
                 logger.info(`[${tab.name}] Context window warning — will summarize on next turn`);
               } else if (contextAction === 'checkpoint') {
                 checkpointTriggered = true;
@@ -289,7 +340,9 @@ export class TabManager {
                   logger.warn(`[${tab.name}] Circuit breaker tripped, killing subprocess`);
                   subprocess.kill();
                 } else if (action === 'notify') {
-                  this.onNotify?.(`Loop detected in tab "${tab.name}": ${toolUse.name} repeated 10+ times. Send /stop ${tab.name} to kill it.`).catch(err => logger.warn('Notify failed:', err));
+                  this.onNotify?.(
+                    `Loop detected in tab "${tab.name}": ${toolUse.name} repeated 10+ times. Send /stop ${tab.name} to kill it.`,
+                  ).catch((err) => logger.warn('Notify failed:', err));
                 } else if (action === 'warn') {
                   loopWarningPending = true;
                 }
@@ -300,45 +353,45 @@ export class TabManager {
           }
         },
         onExit: (code) => {
+          if (errored) {
+            // onError already rejected and drained the queue; don't double-dispatch.
+            return;
+          }
           this.subprocesses.delete(tab.name);
-          this.circuitBreakers.delete(tab.name);
 
           const result: SendResult = {
             text: resultEvent?.result ?? resultText,
             costUsd: resultEvent?.total_cost_usd ?? 0,
             durationMs: resultEvent?.duration_ms ?? 0,
             sessionId: subprocess.sessionId,
-            error: resultEvent?.is_error ?? (code !== 0),
+            error: resultEvent?.is_error ?? code !== 0,
           };
 
           // Handle resume failure (Claude Code session cache rotated / never existed / expired).
-          // Detection covers both legacy text-based errors and the modern error_during_execution
-          // event shape ({"subtype":"error_during_execution","errors":["No conversation found..."]}).
-          // retryDepth guards against any pathological loop.
-          const staleSession = result.error && shouldResume && retryDepth === 0 && (
-            result.text.match(/session (not found|expired|invalid)/i) !== null ||
-            (resultEvent?.subtype === 'error_during_execution' &&
-             resultEvent.errors?.some(e => /no conversation found|session.*not found|session.*expired|session.*invalid/i.test(e)))
-          );
-          if (staleSession) {
+          if (StaleSessionDetector.isStale(result, resultEvent, shouldResume, retryDepth)) {
             const detail = resultEvent?.errors?.[0] ?? result.text.split('\n')[0];
-            logger.warn(`[${tab.name}] Resume session ${tab.sessionId} unavailable in Claude Code cache (${detail}). Retrying with fresh session.`);
-            const recentMsgs = db.prepare(
-              "SELECT role, content FROM messages WHERE tab_id = ? AND content != '' ORDER BY created_at DESC LIMIT 5"
-            ).all(tab.id) as Array<{ role: string; content: string }>;
-            const context = recentMsgs.reverse().map(m => `${m.role}: ${m.content.slice(0, 200)}`).join('\n');
-            const contextPrompt = context
-              ? `[Previous conversation context:\n${context}\n]\n\n${enrichedPrompt}`
-              : enrichedPrompt;
+            logger.warn(
+              `[${tab.name}] Resume session ${tab.sessionId} unavailable in Claude Code cache (${detail}). Retrying with fresh session.`,
+            );
+            const recovery = StaleSessionDetector.buildRecovery(tab.id, enrichedPrompt, db);
+            db.prepare('UPDATE tabs SET session_id = ?, status = ? WHERE id = ?').run(
+              recovery.newSessionId,
+              'idle',
+              tab.id,
+            );
 
-            // Reset session ID for fresh start. Use --session-id (forceFresh) to bypass the
-            // hasDbHistory shouldResume override that would otherwise --resume the new UUID
-            // against an equally-empty Claude Code cache.
-            const newSessionId = uuidv4();
-            db.prepare('UPDATE tabs SET session_id = ?, status = ? WHERE id = ?').run(newSessionId, 'idle', tab.id);
-
-            this.executeMessage({ ...tab, sessionId: newSessionId }, contextPrompt, false, onTextChunk, onToolUse, compactionDepth, true, retryDepth + 1)
-              .then(resolve).catch(reject);
+            this.executeMessage(
+              { ...tab, sessionId: recovery.newSessionId },
+              recovery.contextPrompt,
+              false,
+              onTextChunk,
+              onToolUse,
+              compactionDepth,
+              true,
+              retryDepth + 1,
+            )
+              .then(resolve)
+              .catch(reject);
             return;
           }
 
@@ -346,7 +399,7 @@ export class TabManager {
           // it doesn't trigger the hasDbHistory shouldResume override on future calls.
           if (result.text.trim() !== '') {
             db.prepare(
-              'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)'
+              'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)',
             ).run(
               tab.id,
               'assistant',
@@ -355,113 +408,136 @@ export class TabManager {
               resultEvent?.usage?.input_tokens ?? null,
               resultEvent?.usage?.output_tokens ?? null,
             );
+            // Keep the budget cache in sync with the row we just inserted —
+            // avoids the per-message SUM scan in the next budget check.
+            if (this.tabCostCache.has(tab.id)) {
+              this.tabCostCache.set(
+                tab.id,
+                (this.tabCostCache.get(tab.id) ?? 0) + (result.costUsd || 0),
+              );
+            }
           }
 
           // Update tab
-          db.prepare('UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?')
-            .run('idle', new Date().toISOString(), tab.name);
+          db.prepare(
+            'UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?',
+          ).run('idle', new Date().toISOString(), tab.name);
 
-          logActivity('task_completed', 'Message processed', { tabName: tab.name, durationMs: result.durationMs, costUsd: result.costUsd, details: result.text.slice(0, 500) });
+          logActivity('task_completed', 'Message processed', {
+            tabName: tab.name,
+            durationMs: result.durationMs,
+            costUsd: result.costUsd,
+            details: result.text.slice(0, 500),
+          });
 
           // Context window compaction: if checkpoint was triggered, restart with summary.
           const currentDepth = compactionDepth ?? 0;
-          if (checkpointTriggered && !result.error && result.text && currentDepth < 2) {
-            logger.info(`[${tab.name}] Compacting context (depth ${currentDepth + 1}/2) — requesting summary then restarting session`);
-            this.onNotify?.(`🔄 [${tab.name}] Context window full — compacting and continuing...`).catch(err => logger.warn('Notify failed:', err));
-            // Async/await so any thrown error (from DB or sendMessage) routes through
-            // a single catch instead of the previous nested .then().catch() chain
-            // where a sync throw inside the inner .then could orphan the promise.
-            (async () => {
-              try {
-                const summaryPrompt = 'Summarize your progress in this session concisely: completed steps, current state, remaining steps, and all important identifiers (file paths, URLs, variable names). Output ONLY the summary.';
-                const summaryResult = await this.sendMessage(tab.name, summaryPrompt, { _compactionDepth: currentDepth + 1 });
-                const newSessionId = uuidv4();
-                db.prepare('UPDATE tabs SET session_id = ? WHERE id = ?').run(newSessionId, tab.id);
-                logger.info(`[${tab.name}] Context compacted — new session ${newSessionId.slice(0, 8)}...`);
-                const continuationPrompt = `[CONTEXT RESTORED FROM PREVIOUS SESSION]\n${summaryResult.text}\n\n[Continue the original task: "${enrichedPrompt.slice(0, 500)}"]`;
-                const continuation = await this.sendMessage(tab.name, continuationPrompt, { onTextChunk, _compactionDepth: currentDepth + 1 });
-                resolve(continuation);
-              } catch (err) {
-                logger.error(`[${tab.name}] Compaction failed:`, err);
-                resolve(result); // Fall back to original result so the user gets *something*.
-              }
-            })();
-            return; // Don't resolve here — the async compaction flow resolves.
+          if (
+            checkpointTriggered &&
+            !result.error &&
+            result.text &&
+            currentDepth < ContextCompactor.MAX_DEPTH
+          ) {
+            // Compactor handles its own try/catch and always returns a SendResult.
+            // The queue drain MUST happen regardless of compaction outcome — the
+            // previous pattern omitted it in this branch, so a queued message
+            // could wait indefinitely while compaction recursion was in flight.
+            ContextCompactor.compact(
+              tab,
+              enrichedPrompt,
+              result,
+              onTextChunk,
+              currentDepth,
+              (tabName, p, opts) => this.sendMessage(tabName, p, opts),
+              this.onNotify,
+              db,
+            )
+              .then(resolve)
+              .finally(() => this.processNextInQueue(tab.name));
+            return;
           }
 
           // Check for delegation completion
-          import('../delegation/manager.js').then(({ completeDelegation }) => {
+          try {
             const delegation = completeDelegation(tab.name, result.text);
             if (delegation && delegation.returnToTab) {
-              // Queue result message back to the source tab
-              db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(
+              PendingMessageStore.enqueueDelegationResult(
                 delegation.returnToTab,
                 `[Result from tab:${tab.name}]: ${result.text.slice(0, 10000)}`,
-                'delegation_result'
               );
-              this.onNotify?.(`Delegation complete: ${tab.name} → result sent back to ${delegation.returnToTab}`).catch(() => {});
+              logActivity(
+                'delegation_completed',
+                `Delegation ${tab.name} → ${delegation.returnToTab}`,
+                {
+                  tabName: tab.name,
+                  details: result.text.slice(0, 500),
+                },
+              );
+              this.onNotify?.(
+                `Delegation complete: ${tab.name} → result sent back to ${delegation.returnToTab}`,
+              ).catch(() => {});
               logger.info(`Delegation result sent: ${tab.name} → ${delegation.returnToTab}`);
             }
-          }).catch(err => {
+          } catch (err) {
             logger.warn('Delegation completion check failed:', err);
-          });
+          }
 
           resolve(result);
 
           // Process next queued message (prepend loop warning if needed)
-          if (loopWarningPending && this.messageQueues.get(tab.name)?.length) {
-            const next = this.messageQueues.get(tab.name)![0];
-            next.prompt = `[WARNING: You appear to be repeating the same action. Reassess your approach.]\n\n${next.prompt}`;
-            loopWarningPending = false;
+          if (loopWarningPending) {
+            const next = this.queue.peek(tab.name);
+            if (next) {
+              next.prompt = `[WARNING: You appear to be repeating the same action. Reassess your approach.]\n\n${next.prompt}`;
+              loopWarningPending = false;
+            }
           }
           this.processNextInQueue(tab.name);
         },
         onError: (err) => {
+          errored = true;
           this.subprocesses.delete(tab.name);
-          this.circuitBreakers.delete(tab.name);
           this.updateTabStatus(tab.name, 'error');
-          logActivity('task_failed', 'Message failed', { tabName: tab.name, details: err instanceof Error ? err.message : String(err) });
+          logActivity('task_failed', 'Message failed', {
+            tabName: tab.name,
+            details: err instanceof Error ? err.message : String(err),
+          });
           reject(err);
           this.processNextInQueue(tab.name);
         },
       };
 
-      subprocess.send(enrichedPrompt, callbacks, shouldResume).catch(reject);
-
-      // Update tab with PID
-      if (subprocess.pid) {
-        db.prepare('UPDATE tabs SET pid = ? WHERE name = ?').run(subprocess.pid, tab.name);
-      }
+      subprocess.send(enrichedPrompt, callbacks, shouldResume).catch((err) => {
+        if (!errored) {
+          errored = true;
+          this.subprocesses.delete(tab.name);
+          this.updateTabStatus(tab.name, 'error');
+          reject(err);
+          this.processNextInQueue(tab.name);
+        }
+      });
     });
   }
 
   private processNextInQueue(tabName: string): void {
-    const queue = this.messageQueues.get(tabName);
-    if (!queue || queue.length === 0) return;
-
-    const next = queue.shift()!;
+    const next = this.queue.dequeue(tabName);
+    if (!next) return;
     const tab = this.getTab(tabName);
     if (!tab) {
       next.reject(new Error(`Tab "${tabName}" not found`));
       return;
     }
-
     this.executeMessage(tab, next.prompt, false).then(next.resolve).catch(next.reject);
   }
 
   private updateTabStatus(tabName: string, status: TabStatus): void {
-    const db = getDb();
-    db.prepare('UPDATE tabs SET status = ?, last_activity_at = ? WHERE name = ?')
-      .run(status, new Date().toISOString(), tabName);
+    TabStore.setStatus(tabName, status);
   }
 
   private clearQueue(tabName: string): void {
-    const queue = this.messageQueues.get(tabName);
-    if (queue) {
-      for (const item of queue) {
-        item.reject(new Error(`Tab "${tabName}" was stopped`));
-      }
-      this.messageQueues.delete(tabName);
+    const dropped = this.queue.clear(tabName);
+    for (const item of dropped) {
+      item.reject(new Error(`Tab "${tabName}" was stopped`));
     }
   }
 }

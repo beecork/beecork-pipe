@@ -4,4 +4,4 @@ export { WhatsAppChannel } from './whatsapp.js';
 export { WebhookChannel } from './webhook.js';
 export { DiscordChannel } from './discord.js';
 export { loadCommunityChannels } from './loader.js';
-export type { Channel, ChannelContext, InboundMessage, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+export type { Channel, ChannelContext, MediaAttachment, SendOptions } from './types.js';

@@ -125,8 +125,9 @@ export function getDashboardHtml(token: string): string {
           <!-- Message input -->
           <div id="msg-input-area" class="hidden shrink-0 border-t border-bee-700 bg-bee-800 p-3">
             <form id="send-form" onsubmit="sendMessage(event)" class="flex gap-2">
+              <label for="msg-input" class="sr-only">Message</label>
               <input id="msg-input" type="text" placeholder="Send a message to this tab..."
-                class="input-field flex-1 px-3 py-2 text-sm" autocomplete="off">
+                class="input-field flex-1 px-3 py-2 text-sm" autocomplete="off" aria-label="Message">
               <button type="submit" class="btn-primary px-4 py-2 text-sm">Send</button>
             </form>
           </div>
@@ -140,8 +141,9 @@ export function getDashboardHtml(token: string): string {
         <div class="px-4 py-3 border-b border-bee-700 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
           <h2 class="text-sm font-semibold text-gray-300">Memories</h2>
           <div class="flex items-center gap-3 w-full sm:w-auto">
+            <label for="memory-search" class="sr-only">Search memories</label>
             <input id="memory-search" type="text" placeholder="Search..."
-              class="input-field px-3 py-1.5 text-sm flex-1 sm:w-48" oninput="debounceMemorySearch()">
+              class="input-field px-3 py-1.5 text-sm flex-1 sm:w-48" oninput="debounceMemorySearch()" aria-label="Search memories">
             <button onclick="showCreateMemoryModal()" class="btn-ghost px-2 py-1 text-xs whitespace-nowrap">+ Add</button>
             <span id="memory-count" class="text-xs text-gray-500 whitespace-nowrap"></span>
           </div>
@@ -181,9 +183,8 @@ export function getDashboardHtml(token: string): string {
         <div id="cost-chart" class="p-6"></div>
       </div>
     </div>
-  </div>
 
-    <!-- Update Panel -->
+    <!-- Update Panel — must live inside #app so it inherits the height/scroll setup -->
     <div id="panel-update" class="panel hidden h-full overflow-y-auto p-4">
       <div class="max-w-lg space-y-3">
         <div id="update-packages" class="space-y-3 text-sm text-gray-400">Checking for updates...</div>
@@ -198,10 +199,21 @@ export function getDashboardHtml(token: string): string {
 <script>
   const API_TOKEN = ${JSON.stringify(token)};
 
+  // Scrub the auth token out of the URL bar once the cookie is set. The token
+  // is required for first-load but lingers in browser history / referrer-able
+  // copies of the URL otherwise. Referrer-Policy: no-referrer prevents the
+  // worst case; this is defense-in-depth.
+  if (location.search.includes('token=')) {
+    try { history.replaceState(null, '', location.pathname); } catch {}
+  }
+
   // State
   let selectedTab = null;
   let memorySearchTimer = null;
   let tabsData = [];
+  // Track last-seen message count per tab so the background refresh can skip
+  // the DOM rebuild entirely when nothing changed (M23 — fixes scroll jumping).
+  const lastMessageTotals = new Map();
 
   // Toast notifications
   function showToast(msg, isError) {
@@ -323,7 +335,12 @@ export function getDashboardHtml(token: string): string {
 
   // --- Tabs ---
   async function loadTabs() {
-    try { tabsData = await api('/api/tabs'); } catch { return; }
+    try { tabsData = await api('/api/tabs'); }
+    catch (err) {
+      const list = document.getElementById('tab-list');
+      if (list) list.innerHTML = '<p class="text-red-400 text-xs text-center py-8">Failed to load tabs (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const list = document.getElementById('tab-list');
     document.getElementById('tab-count').textContent = tabsData.length.toString();
 
@@ -335,7 +352,10 @@ export function getDashboardHtml(token: string): string {
     list.innerHTML = tabsData.map(t => {
       const isActive = selectedTab === t.name ? ' active' : '';
       const cost = t.total_cost > 0 ? '$' + t.total_cost.toFixed(4) : '';
-      return '<div class="tab-item px-3 py-2.5 cursor-pointer' + isActive + '" data-tab-name="' + esc(t.name) + '" role="button" tabindex="0" onclick="selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')" onkeydown="if(event.key===\\'Enter\\')selectTab(\\'' + esc(t.name).replace(/'/g, "\\\\'") + '\\')">' +
+      // esc() already replaces ' with &#39;, and tab names are regex-validated
+      // to [a-zA-Z0-9-] anyway, so the previous chained .replace(/'/g, ...) was
+      // dead code. Drop it for clarity.
+      return '<div class="tab-item px-3 py-2.5 cursor-pointer' + isActive + '" data-tab-name="' + esc(t.name) + '" role="button" tabindex="0" onclick="selectTab(\\'' + esc(t.name) + '\\')" onkeydown="if(event.key===\\'Enter\\')selectTab(\\'' + esc(t.name) + '\\')">' +
         '<div class="flex items-center justify-between">' +
           '<div class="flex items-center gap-2 min-w-0">' +
             '<span class="status-dot tab-status-dot status-' + esc(t.status) + '"></span>' +
@@ -368,14 +388,31 @@ export function getDashboardHtml(token: string): string {
       document.getElementById('msg-tab-status').textContent = tab.status;
     }
 
-    let data; try { data = await api('/api/tabs/' + encodeURIComponent(name) + '/messages?limit=100'); } catch { return; }
+    let data; try { data = await api('/api/tabs/' + encodeURIComponent(name) + '/messages?limit=100'); } catch (err) {
+      const list = document.getElementById('msg-list');
+      if (list) list.innerHTML = '<p class="text-red-400 text-sm text-center py-8">Failed to load messages (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const list = document.getElementById('msg-list');
     document.getElementById('msg-count').textContent = data.total + ' messages';
+
+    // Skip the full DOM rebuild when nothing changed — preserves user's scroll
+    // position, expanded <details> blocks, text selection. Without this guard
+    // the 8s background refresh kept teleporting the user to the top of the
+    // message list every tick.
+    const prevTotal = lastMessageTotals.get(name);
+    if (!fromUser && prevTotal === data.total) return;
+    lastMessageTotals.set(name, data.total);
 
     if (data.messages.length === 0) {
       list.innerHTML = '<p class="text-gray-600 text-sm text-center py-16">No messages in this tab</p>';
       return;
     }
+
+    // Capture scroll position relative to the bottom so we can restore after
+    // the rewrite. distanceFromBottom = scrollHeight - scrollTop - clientHeight
+    const wasNearBottom = !fromUser && (list.scrollHeight - list.scrollTop - list.clientHeight < 60);
+    const distanceFromBottom = list.scrollHeight - list.scrollTop;
 
     list.innerHTML = data.messages.map(m => {
       const cls = m.role === 'user' ? 'msg-user' : 'msg-assistant';
@@ -406,6 +443,13 @@ export function getDashboardHtml(token: string): string {
     if (fromUser) {
       list.scrollTop = list.scrollHeight;
       document.getElementById('msg-input').focus();
+    } else if (wasNearBottom) {
+      // User was reading the latest messages — keep them pinned to the bottom.
+      list.scrollTop = list.scrollHeight;
+    } else {
+      // User was scrolled up reading older messages — restore their position
+      // relative to the bottom so new messages don't yank them around.
+      list.scrollTop = list.scrollHeight - distanceFromBottom;
     }
   }
 
@@ -492,7 +536,13 @@ export function getDashboardHtml(token: string): string {
   // --- Memories ---
   async function loadMemories(query) {
     const q = query || document.getElementById('memory-search').value || '';
-    let data; try { data = await api('/api/memories?limit=100&q=' + encodeURIComponent(q)); } catch { return; }
+    let data;
+    try { data = await api('/api/memories?limit=100&q=' + encodeURIComponent(q)); }
+    catch (err) {
+      const list = document.getElementById('memory-list');
+      if (list) list.innerHTML = '<p class="text-red-400 text-sm text-center py-8">Failed to load memories (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const list = document.getElementById('memory-list');
     document.getElementById('memory-count').textContent = data.total + ' total';
 
@@ -560,7 +610,13 @@ export function getDashboardHtml(token: string): string {
 
   // --- Tasks (formerly Crons) ---
   async function loadCrons() {
-    let crons; try { crons = await api('/api/tasks'); } catch { return; }
+    let crons;
+    try { crons = await api('/api/tasks'); }
+    catch (err) {
+      const list = document.getElementById('cron-list');
+      if (list) list.innerHTML = '<p class="text-red-400 text-sm text-center py-8">Failed to load tasks (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const list = document.getElementById('cron-list');
 
     if (crons.length === 0) {
@@ -577,7 +633,7 @@ export function getDashboardHtml(token: string): string {
             '<span class="text-sm font-medium text-white">' + esc(c.name) + '</span>' +
           '</div>' +
           '<div class="flex items-center gap-2">' +
-            '<span class="text-xs font-mono text-gray-400">' + c.schedule_type + ': ' + esc(c.schedule) + '</span>' +
+            '<span class="text-xs font-mono text-gray-400">' + esc(c.schedule_type) + ': ' + esc(c.schedule) + '</span>' +
             '<button class="btn-danger px-1.5 py-0.5 text-xs opacity-0 group-hover:opacity-100" aria-label="Delete task" onclick="deleteCron(\\'' + esc(c.id) + '\\')">x</button>' +
           '</div>' +
         '</div>' +
@@ -637,7 +693,13 @@ export function getDashboardHtml(token: string): string {
 
   // --- Watchers ---
   async function loadWatchers() {
-    let watchers; try { watchers = await api('/api/watchers'); } catch { return; }
+    let watchers;
+    try { watchers = await api('/api/watchers'); }
+    catch (err) {
+      const list = document.getElementById('watcher-list');
+      if (list) list.innerHTML = '<p class="text-red-400 text-sm text-center py-8">Failed to load watchers (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const list = document.getElementById('watcher-list');
 
     if (watchers.length === 0) {
@@ -675,7 +737,13 @@ export function getDashboardHtml(token: string): string {
 
   // --- Costs ---
   async function loadCosts() {
-    let costs; try { costs = await api('/api/costs'); } catch { return; }
+    let costs;
+    try { costs = await api('/api/costs'); }
+    catch (err) {
+      const chart = document.getElementById('cost-chart');
+      if (chart) chart.innerHTML = '<p class="text-red-400 text-sm text-center py-8">Failed to load costs (' + esc(err && err.message ? err.message : String(err)) + ')</p>';
+      return;
+    }
     const chart = document.getElementById('cost-chart');
 
     if (costs.length === 0) {

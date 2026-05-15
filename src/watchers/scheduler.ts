@@ -5,6 +5,8 @@ import { evaluateWatcher } from './evaluator.js';
 import { execAsync, intervalToMs } from '../tasks/scheduler.js';
 import { getLogsDir, getWatcherReloadSignalPath } from '../util/paths.js';
 import { logger } from '../util/logger.js';
+import { PendingMessageStore } from '../session/pending-store.js';
+import { logActivity } from '../timeline/index.js';
 import type { Watcher } from './types.js';
 
 export class WatcherScheduler {
@@ -57,7 +59,11 @@ export class WatcherScheduler {
   checkForReload(): void {
     const signalPath = getWatcherReloadSignalPath();
     if (fs.existsSync(signalPath)) {
-      try { fs.unlinkSync(signalPath); } catch { /* race condition, ok */ }
+      try {
+        fs.unlinkSync(signalPath);
+      } catch {
+        /* race condition, ok */
+      }
       logger.info('Watchers: reload signal detected, reloading');
       this.loadAndSchedule();
     }
@@ -111,10 +117,19 @@ export class WatcherScheduler {
 
       if (result.triggered) {
         this.store.markTriggered(watcher.id);
-        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] TRIGGERED: ${result.output.slice(0, 500)}\n`);
+        await fs.promises.appendFile(
+          logFile,
+          `[${new Date().toISOString()}] TRIGGERED: ${result.output.slice(0, 500)}\n`,
+        );
+        logActivity('watcher_triggered', `Watcher "${watcher.name}" triggered`, {
+          details: result.output.slice(0, 500),
+        });
         await this.executeAction(watcher, result.output);
       } else {
-        await fs.promises.appendFile(logFile, `[${new Date().toISOString()}] OK: ${result.output.slice(0, 200)}\n`);
+        await fs.promises.appendFile(
+          logFile,
+          `[${new Date().toISOString()}] OK: ${result.output.slice(0, 200)}\n`,
+        );
       }
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
@@ -136,7 +151,9 @@ export class WatcherScheduler {
           try {
             await execAsync(watcher.actionDetails, { timeout: 60000 });
             if (this.onNotify) {
-              await this.onNotify(`Watcher "${watcher.name}" triggered and auto-fixed:\n${output.slice(0, 300)}`);
+              await this.onNotify(
+                `Watcher "${watcher.name}" triggered and auto-fixed:\n${output.slice(0, 300)}`,
+              );
             }
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
@@ -165,9 +182,11 @@ export class WatcherScheduler {
               message = watcher.actionDetails.slice(colonIdx + 1).trim();
             }
             const fullMessage = `[Watcher "${watcher.name}" triggered] ${message}\n\nWatcher output:\n${output.slice(0, 500)}`;
-            db.prepare('INSERT INTO pending_messages (tab_name, message, type) VALUES (?, ?, ?)').run(tabName, fullMessage, 'delegation');
+            PendingMessageStore.enqueueDelegation(tabName, fullMessage, db);
             if (this.onNotify) {
-              await this.onNotify(`Watcher "${watcher.name}" triggered -- delegated to tab:${tabName}`);
+              await this.onNotify(
+                `Watcher "${watcher.name}" triggered -- delegated to tab:${tabName}`,
+              );
             }
           } catch (err) {
             logger.error(`Watcher "${watcher.name}" delegation failed:`, err);

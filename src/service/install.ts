@@ -28,9 +28,10 @@ function findNodePath(): string {
 function findDaemonPath(): string {
   // import.meta.url is dist/service/install.js — daemon is at dist/daemon.js (one level up)
   const thisFileUrl = new URL(import.meta.url);
-  const thisFile = process.platform === 'win32'
-    ? thisFileUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1') // strip leading / on Windows drive paths
-    : thisFileUrl.pathname;
+  const thisFile =
+    process.platform === 'win32'
+      ? thisFileUrl.pathname.replace(/^\/([A-Za-z]:)/, '$1') // strip leading / on Windows drive paths
+      : thisFileUrl.pathname;
   const distDir = path.dirname(path.dirname(thisFile)); // go up from service/ to dist/
   const daemonPath = path.join(distDir, 'daemon.js');
   if (fs.existsSync(daemonPath)) return daemonPath;
@@ -90,11 +91,15 @@ export function stopService(): void {
     const plistPath = getLaunchdPlistPath();
     try {
       execSync(`launchctl unload "${plistPath}"`, { stdio: 'inherit' });
-    } catch { /* not loaded */ }
+    } catch {
+      /* not loaded */
+    }
   } else {
     try {
       execSync('systemctl --user stop beecork', { stdio: 'inherit' });
-    } catch { /* not running */ }
+    } catch {
+      /* not running */
+    }
   }
 }
 
@@ -111,7 +116,11 @@ function installLaunchd(nodePath: string, daemonPath: string): string {
 
 function uninstallLaunchd(): string {
   const plistPath = getLaunchdPlistPath();
-  try { execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' }); } catch { /* ok */ }
+  try {
+    execSync(`launchctl unload "${plistPath}"`, { stdio: 'pipe' });
+  } catch {
+    /* ok */
+  }
   if (fs.existsSync(plistPath)) fs.unlinkSync(plistPath);
   return plistPath;
 }
@@ -132,8 +141,16 @@ function installSystemd(nodePath: string, daemonPath: string): string {
 
 function uninstallSystemd(): string {
   const unitPath = getSystemdUnitPath();
-  try { execSync('systemctl --user disable beecork', { stdio: 'pipe' }); } catch { /* ok */ }
-  try { execSync('systemctl --user stop beecork', { stdio: 'pipe' }); } catch { /* ok */ }
+  try {
+    execSync('systemctl --user disable beecork', { stdio: 'pipe' });
+  } catch {
+    /* ok */
+  }
+  try {
+    execSync('systemctl --user stop beecork', { stdio: 'pipe' });
+  } catch {
+    /* ok */
+  }
   if (fs.existsSync(unitPath)) fs.unlinkSync(unitPath);
   execSync('systemctl --user daemon-reload', { stdio: 'pipe' });
   return unitPath;

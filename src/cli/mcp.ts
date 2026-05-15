@@ -1,21 +1,20 @@
 import fs from 'node:fs';
-import { getBeecorkHome } from '../util/paths.js';
-
-const MCP_CONFIG_PATH = `${getBeecorkHome()}/mcp-config.json`;
+import { getMcpConfigPath } from '../util/paths.js';
 
 interface MCPConfig {
   mcpServers: Record<string, { command: string; args?: string[]; env?: Record<string, string> }>;
 }
 
 function loadMcpConfig(): MCPConfig {
-  if (fs.existsSync(MCP_CONFIG_PATH)) {
-    return JSON.parse(fs.readFileSync(MCP_CONFIG_PATH, 'utf-8'));
+  const path = getMcpConfigPath();
+  if (fs.existsSync(path)) {
+    return JSON.parse(fs.readFileSync(path, 'utf-8'));
   }
   return { mcpServers: {} };
 }
 
 function saveMcpConfig(config: MCPConfig): void {
-  fs.writeFileSync(MCP_CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+  fs.writeFileSync(getMcpConfigPath(), JSON.stringify(config, null, 2), { mode: 0o600 });
 }
 
 export function mcpAdd(name: string, command: string, args: string[]): void {

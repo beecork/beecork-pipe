@@ -1,5 +1,11 @@
 import { saveMedia } from '../store.js';
-import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
+import type {
+  MediaGenerator,
+  MediaType,
+  GenerateOptions,
+  GenerateResult,
+  RecraftGenerateResponse,
+} from '../types.js';
 
 export class RecraftGenerator implements MediaGenerator {
   readonly id = 'recraft';
@@ -8,7 +14,11 @@ export class RecraftGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'image') throw new Error('Recraft only supports image/vector generation');
 
     const isVector = options?.format === 'svg' || options?.style === 'vector';
@@ -19,15 +29,16 @@ export class RecraftGenerator implements MediaGenerator {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         prompt: prompt.slice(0, 2000),
         model: isVector ? 'recraftv4' : 'recraftv4',
         response_format: isVector ? 'url' : 'b64_json',
-        style: isVector ? 'vector_illustration' : (options?.style || 'realistic_image'),
-        size: options?.width && options?.height ? `${options.width}x${options.height}` : '1024x1024',
+        style: isVector ? 'vector_illustration' : options?.style || 'realistic_image',
+        size:
+          options?.width && options?.height ? `${options.width}x${options.height}` : '1024x1024',
       }),
       signal: AbortSignal.timeout(120000),
     });
@@ -37,7 +48,7 @@ export class RecraftGenerator implements MediaGenerator {
       throw new Error(`Recraft error ${response.status}: ${err.slice(0, 200)}`);
     }
 
-    const data = await response.json() as any;
+    const data = (await response.json()) as RecraftGenerateResponse;
     const image = data.data?.[0];
 
     if (isVector && image?.url) {

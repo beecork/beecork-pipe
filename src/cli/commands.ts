@@ -4,6 +4,7 @@ import { spawn, execSync } from 'node:child_process';
 import { getDb, closeDb } from '../db/index.js';
 import { getConfig } from '../config.js';
 import { TaskStore } from '../tasks/store.js';
+import { TabStore } from '../session/tab-store.js';
 import { getDaemonPid, timeAgo } from './helpers.js';
 import { startService, stopService } from '../service/install.js';
 import { getPidPath, getLogsDir } from '../util/paths.js';
@@ -18,12 +19,6 @@ function requireDb(): Database.Database {
     console.error('Database not initialized — run "beecork setup" first.');
     process.exit(1);
   }
-}
-
-// Map snake_case DB rows to display format
-interface TabRow {
-  id: string; name: string; session_id: string; status: string;
-  working_dir: string; created_at: string; last_activity_at: string; pid: number | null;
 }
 
 export async function startDaemon(): Promise<void> {
@@ -83,25 +78,29 @@ export async function showStatus(): Promise<void> {
   console.log(`Deployment: ${config.deployment}`);
 
   try {
-    const db = getDb();
-    const tabs = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[];
+    getDb(); // ensure DB initialized
+    const tabs = TabStore.listAll();
 
     console.log(`\nTabs (${tabs.length}):`);
     for (const tab of tabs) {
-      const ago = timeAgo(tab.last_activity_at);
+      const ago = timeAgo(tab.lastActivityAt);
       const pidInfo = tab.pid ? ` (PID ${tab.pid})` : '';
-      console.log(`  ${tab.name.padEnd(20)} ${tab.status.padEnd(12)} last active: ${ago}${pidInfo}`);
+      console.log(
+        `  ${tab.name.padEnd(20)} ${tab.status.padEnd(12)} last active: ${ago}${pidInfo}`,
+      );
     }
 
     const store = new TaskStore();
     const jobs = store.list();
-    const activeJobs = jobs.filter(j => j.enabled);
+    const activeJobs = jobs.filter((j) => j.enabled);
     console.log(`\nTasks: ${activeJobs.length} active (${jobs.length} total)`);
 
     if (activeJobs.length > 0) {
       for (const job of activeJobs.slice(0, 5)) {
         const lastRun = job.lastRunAt ? `last: ${timeAgo(job.lastRunAt)}` : 'never run';
-        console.log(`  ${job.name.padEnd(20)} ${job.scheduleType}:${job.schedule.padEnd(15)} → tab:${job.tabName} (${lastRun})`);
+        console.log(
+          `  ${job.name.padEnd(20)} ${job.scheduleType}:${job.schedule.padEnd(15)} → tab:${job.tabName} (${lastRun})`,
+        );
       }
     }
 
@@ -114,8 +113,8 @@ export async function showStatus(): Promise<void> {
 }
 
 export async function listTabs(): Promise<void> {
-  const db = requireDb();
-  const tabs = db.prepare('SELECT * FROM tabs ORDER BY last_activity_at DESC').all() as TabRow[];
+  requireDb();
+  const tabs = TabStore.listAll();
   closeDb();
 
   if (tabs.length === 0) {
@@ -125,8 +124,8 @@ export async function listTabs(): Promise<void> {
 
   console.log(`\nTabs (${tabs.length}):\n`);
   for (const tab of tabs) {
-    const ago = timeAgo(tab.last_activity_at);
-    console.log(`  ${tab.name.padEnd(20)} [${tab.status}] dir:${tab.working_dir} — ${ago}`);
+    const ago = timeAgo(tab.lastActivityAt);
+    console.log(`  ${tab.name.padEnd(20)} [${tab.status}] dir:${tab.workingDir} — ${ago}`);
   }
   console.log('');
 }
@@ -143,7 +142,11 @@ export async function tailLogs(tabName?: string): Promise<void> {
 
   if (process.platform === 'win32') {
     // Windows: use PowerShell Get-Content -Wait
-    const child = spawn('powershell', ['-Command', `Get-Content -Path '${logFile}' -Tail 50 -Wait`], { stdio: 'inherit' });
+    const child = spawn(
+      'powershell',
+      ['-Command', `Get-Content -Path '${logFile}' -Tail 50 -Wait`],
+      { stdio: 'inherit' },
+    );
     process.on('SIGINT', () => child.kill());
   } else {
     const child = spawn('tail', ['-f', '-n', '50', logFile], { stdio: 'inherit' });
@@ -183,7 +186,9 @@ export async function deleteCron(id: string): Promise<void> {
 
 export async function listWatchers(): Promise<void> {
   const db = requireDb();
-  const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<Record<string, unknown>>;
+  const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as Array<
+    Record<string, unknown>
+  >;
   closeDb();
 
   if (watchers.length === 0) {
@@ -196,7 +201,9 @@ export async function listWatchers(): Promise<void> {
     const status = w.enabled ? 'enabled' : 'disabled';
     const lastCheck = w.last_check_at ? timeAgo(w.last_check_at as string) : 'never';
     console.log(`  ${(w.name as string).padEnd(20)} [${status}] ${w.schedule}`);
-    console.log(`    condition: ${w.condition} | action: ${w.action} | triggers: ${w.trigger_count} | last: ${lastCheck} | ID: ${w.id}`);
+    console.log(
+      `    condition: ${w.condition} | action: ${w.action} | triggers: ${w.trigger_count} | last: ${lastCheck} | ID: ${w.id}`,
+    );
   }
   console.log('');
 }
@@ -215,7 +222,9 @@ export async function deleteWatcher(id: string): Promise<void> {
 
 export async function listMemories(): Promise<void> {
   const db = requireDb();
-  const memories = db.prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT 50').all() as Memory[];
+  const memories = db
+    .prepare('SELECT * FROM memories ORDER BY created_at DESC LIMIT 50')
+    .all() as Memory[];
   closeDb();
 
   if (memories.length === 0) {
@@ -226,7 +235,9 @@ export async function listMemories(): Promise<void> {
   console.log(`\nMemories (${memories.length}):\n`);
   for (const mem of memories) {
     const scope = mem.tabName ? `tab:${mem.tabName}` : 'global';
-    console.log(`  [${mem.id}] (${mem.source}, ${scope}) ${mem.content.slice(0, 100)}${mem.content.length > 100 ? '...' : ''}`);
+    console.log(
+      `  [${mem.id}] (${mem.source}, ${scope}) ${mem.content.slice(0, 100)}${mem.content.length > 100 ? '...' : ''}`,
+    );
     console.log(`       ${timeAgo(mem.createdAt)}`);
   }
   console.log('');
@@ -301,7 +312,9 @@ export async function sendMessage(message: string): Promise<void> {
     const result = await manager.sendMessage('default', message);
     console.log(result.text);
     if (result.costUsd > 0) {
-      console.log(`\n--- Cost: $${result.costUsd.toFixed(4)} | Duration: ${result.durationMs}ms ---`);
+      console.log(
+        `\n--- Cost: $${result.costUsd.toFixed(4)} | Duration: ${result.durationMs}ms ---`,
+      );
     }
   } catch (err) {
     console.error('Error:', err instanceof Error ? err.message : err);

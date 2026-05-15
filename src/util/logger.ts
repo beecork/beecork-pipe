@@ -11,11 +11,26 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
+// Patterns that should never reach disk or stdout. Each channel uses a per-call
+// sanitizer too (defense-in-depth), but the Logger is the last line of defense
+// for any third-party error object that happens to embed a secret in its message.
+const REDACTION_PATTERNS: Array<{ re: RegExp; replacement: string }> = [
+  { re: /bot\d+:[A-Za-z0-9_-]+/g, replacement: 'bot<REDACTED>' }, // Telegram bot token
+];
+
+function redact(s: string): string {
+  let out = s;
+  for (const { re, replacement } of REDACTION_PATTERNS) out = out.replace(re, replacement);
+  return out;
+}
+
+const ROTATE_BYTES = 10 * 1024 * 1024;
+
 class Logger {
   private minLevel: LogLevel = 'info';
   private logFile: string | null = null;
   private stream: fs.WriteStream | null = null;
-  private writeCount = 0;
+  private bytesWritten = 0;
 
   setLevel(level: LogLevel): void {
     this.minLevel = level;
@@ -26,6 +41,13 @@ class Logger {
     fs.mkdirSync(dir, { recursive: true });
     this.logFile = path.join(dir, name);
     this.stream = fs.createWriteStream(this.logFile, { flags: 'a' });
+    // Seed bytesWritten from the existing file size so we don't reset the
+    // rotation counter on every daemon restart.
+    try {
+      this.bytesWritten = fs.statSync(this.logFile).size;
+    } catch {
+      this.bytesWritten = 0;
+    }
   }
 
   private write(level: LogLevel, msg: string, ...args: unknown[]): void {
@@ -33,13 +55,17 @@ class Logger {
 
     const timestamp = new Date().toISOString();
     const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
-    const line = args.length > 0
-      ? `${prefix} ${msg} ${args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ')}`
-      : `${prefix} ${msg}`;
+    const raw =
+      args.length > 0
+        ? `${prefix} ${msg} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`
+        : `${prefix} ${msg}`;
+    const line = redact(raw);
 
     if (this.stream) {
-      this.stream.write(line + '\n');
-      this.checkRotation();
+      const out = line + '\n';
+      this.stream.write(out);
+      this.bytesWritten += out.length;
+      if (this.bytesWritten > ROTATE_BYTES) this.checkRotation();
     }
 
     if (level === 'error') {
@@ -51,26 +77,36 @@ class Logger {
     }
   }
 
-  debug(msg: string, ...args: unknown[]): void { this.write('debug', msg, ...args); }
-  info(msg: string, ...args: unknown[]): void { this.write('info', msg, ...args); }
-  warn(msg: string, ...args: unknown[]): void { this.write('warn', msg, ...args); }
-  error(msg: string, ...args: unknown[]): void { this.write('error', msg, ...args); }
+  debug(msg: string, ...args: unknown[]): void {
+    this.write('debug', msg, ...args);
+  }
+  info(msg: string, ...args: unknown[]): void {
+    this.write('info', msg, ...args);
+  }
+  warn(msg: string, ...args: unknown[]): void {
+    this.write('warn', msg, ...args);
+  }
+  error(msg: string, ...args: unknown[]): void {
+    this.write('error', msg, ...args);
+  }
 
   private checkRotation(): void {
     if (!this.logFile || !this.stream) return;
-    this.writeCount++;
-    if (this.writeCount < 100) return;
-    this.writeCount = 0;
+    // bytesWritten-based gate already triggered us; rotate without statSync.
     try {
-      const stats = fs.statSync(this.logFile);
-      if (stats.size > 10 * 1024 * 1024) {
-        this.stream.end();
-        const rotated = this.logFile + '.1';
-        try { fs.unlinkSync(rotated); } catch {}
-        fs.renameSync(this.logFile, rotated);
-        this.stream = fs.createWriteStream(this.logFile, { flags: 'a' });
+      this.stream.end();
+      const rotated = this.logFile + '.1';
+      try {
+        fs.unlinkSync(rotated);
+      } catch {
+        /* not fatal */
       }
-    } catch {}
+      fs.renameSync(this.logFile, rotated);
+      this.stream = fs.createWriteStream(this.logFile, { flags: 'a' });
+      this.bytesWritten = 0;
+    } catch {
+      /* rotation failure shouldn't kill the daemon */
+    }
   }
 
   close(): void {
@@ -82,3 +118,11 @@ class Logger {
 }
 
 export const logger = new Logger();
+
+// Allow operators to bump verbosity at runtime without recompiling.
+// e.g. `BEECORK_LOG_LEVEL=debug beecork start` surfaces every claude subprocess
+// stdout/stderr line via the logger.debug calls.
+const envLevel = process.env.BEECORK_LOG_LEVEL?.toLowerCase();
+if (envLevel === 'debug' || envLevel === 'info' || envLevel === 'warn' || envLevel === 'error') {
+  logger.setLevel(envLevel);
+}

@@ -11,7 +11,11 @@ function safeEqualToken(provided: string | undefined | null, expected: string): 
   const a = Buffer.from(provided);
   const b = Buffer.from(expected);
   if (a.length !== b.length) return false;
-  try { return crypto.timingSafeEqual(a, b); } catch { return false; }
+  try {
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
 }
 
 function openBrowser(url: string): void {
@@ -61,7 +65,11 @@ export function startDashboardServer(port = 0): void {
     if (path.startsWith('/api/')) {
       const authHeader = req.headers.authorization;
       const queryToken = url.searchParams.get('token');
-      const cookieToken = req.headers.cookie?.split(';').map(c => c.trim()).find(c => c.startsWith('beecork_dash='))?.split('=')[1];
+      const cookieToken = req.headers.cookie
+        ?.split(';')
+        .map((c) => c.trim())
+        .find((c) => c.startsWith('beecork_dash='))
+        ?.split('=')[1];
       const providedToken = authHeader?.replace('Bearer ', '') || queryToken || cookieToken;
       if (!safeEqualToken(providedToken, authToken)) {
         json(res, { error: 'Unauthorized' }, 401);

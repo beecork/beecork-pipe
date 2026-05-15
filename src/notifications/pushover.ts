@@ -4,7 +4,10 @@ export class PushoverProvider implements NotificationProvider {
   readonly id = 'pushover';
   readonly name = 'Pushover';
 
-  constructor(private userKey: string, private appToken: string) {}
+  constructor(
+    private userKey: string,
+    private appToken: string,
+  ) {}
 
   async send(message: string, urgent?: boolean): Promise<void> {
     const response = await fetch('https://api.pushover.net/1/messages.json', {

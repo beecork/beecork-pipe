@@ -6,14 +6,21 @@ import { createTTSProvider, type TTSProvider } from './tts.js';
 import type { VoiceConfig } from '../types.js';
 import { logger } from '../util/logger.js';
 
-export function initVoiceProviders(voice?: VoiceConfig): { stt: STTProvider | null; tts: TTSProvider | null } {
+export function initVoiceProviders(voice?: VoiceConfig): {
+  stt: STTProvider | null;
+  tts: TTSProvider | null;
+} {
   let stt: STTProvider | null = null;
   let tts: TTSProvider | null = null;
   if (voice?.sttProvider && voice.sttProvider !== 'none') {
     stt = createSTTProvider({ provider: voice.sttProvider, apiKey: voice.sttApiKey });
   }
   if (voice?.ttsProvider && voice.ttsProvider !== 'none') {
-    tts = createTTSProvider({ provider: voice.ttsProvider, apiKey: voice.ttsApiKey, voice: voice.ttsVoice });
+    tts = createTTSProvider({
+      provider: voice.ttsProvider,
+      apiKey: voice.ttsApiKey,
+      voice: voice.ttsVoice,
+    });
   }
   return { stt, tts };
 }
@@ -22,7 +29,7 @@ export async function transcribeVoiceMessages(
   media: Array<{ type: string; filePath?: string; caption?: string }>,
   sttProvider: { transcribe(path: string): Promise<string>; warmup?(): void },
   channelId: string,
-  warmedUp: boolean
+  warmedUp: boolean,
 ): Promise<boolean> {
   if (!sttProvider) return warmedUp;
   if (!warmedUp) {

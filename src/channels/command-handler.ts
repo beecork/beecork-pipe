@@ -4,6 +4,8 @@
  */
 import { timeAgo } from '../util/text.js';
 import { validateTabName } from '../config.js';
+import { exportTab, formatHandoffInfo } from '../session/handoff.js';
+import { logActivity } from '../timeline/index.js';
 import type { TabManager } from '../session/manager.js';
 import type { Project } from '../projects/types.js';
 
@@ -53,7 +55,9 @@ export async function handleSharedCommand(
   if (text === '/tabs' || text.startsWith('/tabs@')) {
     const tabs = tabManager.listTabs();
     if (tabs.length === 0) return { handled: true, response: 'No tabs.' };
-    const list = tabs.map(t => `• ${t.name} [${t.status}] — ${timeAgo(t.lastActivityAt)}`).join('\n');
+    const list = tabs
+      .map((t) => `• ${t.name} [${t.status}] — ${timeAgo(t.lastActivityAt)}`)
+      .join('\n');
     return { handled: true, response: list };
   }
 
@@ -109,10 +113,12 @@ export async function handleSharedCommand(
     const db = getDb();
     const watchers = db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as WatcherRow[];
     if (watchers.length === 0) return { handled: true, response: 'No watchers configured.' };
-    const watchList = watchers.map((w) => {
-      const status = w.enabled ? 'active' : 'disabled';
-      return `[${status}] ${w.name} -- ${w.schedule} (triggers: ${w.trigger_count})`;
-    }).join('\n');
+    const watchList = watchers
+      .map((w) => {
+        const status = w.enabled ? 'active' : 'disabled';
+        return `[${status}] ${w.name} -- ${w.schedule} (triggers: ${w.trigger_count})`;
+      })
+      .join('\n');
     return { handled: true, response: `Watchers:\n${watchList}` };
   }
 
@@ -122,10 +128,12 @@ export async function handleSharedCommand(
     const db = getDb();
     const tasks = db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[];
     if (tasks.length === 0) return { handled: true, response: 'No tasks scheduled.' };
-    const taskList = tasks.map((t) => {
-      const status = t.enabled ? 'enabled' : 'disabled';
-      return `[${status}] ${t.name} (${t.schedule_type}: ${t.schedule}) -> tab:${t.tab_name}`;
-    }).join('\n');
+    const taskList = tasks
+      .map((t) => {
+        const status = t.enabled ? 'enabled' : 'disabled';
+        return `[${status}] ${t.name} (${t.schedule_type}: ${t.schedule}) -> tab:${t.tab_name}`;
+      })
+      .join('\n');
     return { handled: true, response: `Tasks:\n${taskList}` };
   }
 
@@ -138,28 +146,36 @@ export async function handleSharedCommand(
   // /activity [hours]
   if (text === '/activity' || text.startsWith('/activity ')) {
     const hours = parseInt(text.slice(10).trim()) || 24;
-    const { getActivitySummary, formatActivitySummary } = await import('../observability/analytics.js');
+    const { getActivitySummary, formatActivitySummary } =
+      await import('../observability/analytics.js');
     return { handled: true, response: formatActivitySummary(getActivitySummary(hours)) };
   }
 
   // /handoff [tab]
   if (text.startsWith('/handoff')) {
     const tabName = text.slice(9).trim() || 'default';
-    const { exportTab, formatHandoffInfo } = await import('../cli/handoff.js');
     const info = exportTab(tabName);
     if (!info) return { handled: true, response: `Tab "${tabName}" not found.` };
+    logActivity('user_command', '/handoff', { tabName });
     return { handled: true, response: formatHandoffInfo(info) };
   }
 
   // /folders (also accept legacy /projects)
-  if (text === '/folders' || text === '/projects' || text.startsWith('/folders@') || text.startsWith('/projects@')) {
+  if (
+    text === '/folders' ||
+    text === '/projects' ||
+    text.startsWith('/folders@') ||
+    text.startsWith('/projects@')
+  ) {
     const { listProjects } = await import('../projects/index.js');
     const projects = listProjects();
-    if (projects.length === 0) return { handled: true, response: 'No folders found. Create one with /newfolder <name>' };
+    if (projects.length === 0)
+      return { handled: true, response: 'No folders found. Create one with /newfolder <name>' };
     const userProjects = projects.filter((p): p is Project => p.type === 'user-project');
     const categories = projects.filter((p): p is Project => p.type === 'category');
     let msg = '📁 Folders:\n';
-    if (userProjects.length > 0) msg += userProjects.map((p) => `  • ${p.name} — ${p.path}`).join('\n');
+    if (userProjects.length > 0)
+      msg += userProjects.map((p) => `  • ${p.name} — ${p.path}`).join('\n');
     if (categories.length > 0) {
       msg += '\n\n📂 Categories:\n';
       msg += categories.map((p) => `  • ${p.name}`).join('\n');
@@ -168,14 +184,24 @@ export async function handleSharedCommand(
   }
 
   // /folder <name> (also accept legacy /project <name>)
-  if ((text.startsWith('/folder ') && !text.startsWith('/folders')) || (text.startsWith('/project ') && !text.startsWith('/projects'))) {
+  if (
+    (text.startsWith('/folder ') && !text.startsWith('/folders')) ||
+    (text.startsWith('/project ') && !text.startsWith('/projects'))
+  ) {
     const prefix = text.startsWith('/folder ') ? '/folder ' : '/project ';
     const name = text.slice(prefix.length).trim();
     const { getProject, setUserContext } = await import('../projects/index.js');
     const project = getProject(name);
-    if (!project) return { handled: true, response: `Folder "${name}" not found. Use /folders to list or /newfolder to create.` };
+    if (!project)
+      return {
+        handled: true,
+        response: `Folder "${name}" not found. Use /folders to list or /newfolder to create.`,
+      };
     setUserContext(userId, project.name, project.name);
-    return { handled: true, response: `Switched to folder: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this folder.` };
+    return {
+      handled: true,
+      response: `Switched to folder: ${project.name}\nPath: ${project.path}\n\nNext messages will work in this folder.`,
+    };
   }
 
   // /newfolder <name> [path] (also accept legacy /newproject)
@@ -188,7 +214,10 @@ export async function handleSharedCommand(
     const { createProject, setUserContext } = await import('../projects/index.js');
     const project = createProject(name, customPath);
     setUserContext(userId, project.name, project.name);
-    return { handled: true, response: `✓ Folder "${name}" created at ${project.path}\nSwitched to this folder.` };
+    return {
+      handled: true,
+      response: `✓ Folder "${name}" created at ${project.path}\nSwitched to this folder.`,
+    };
   }
 
   // /close <tab>
@@ -196,7 +225,12 @@ export async function handleSharedCommand(
     const tabNameToClose = text.slice(7).trim();
     if (!tabNameToClose) return { handled: true, response: 'Usage: /close <tabname>' };
     const closed = tabManager.closeTab(tabNameToClose);
-    return { handled: true, response: closed ? `Tab "${tabNameToClose}" permanently closed. History deleted.` : `Tab "${tabNameToClose}" not found.` };
+    return {
+      handled: true,
+      response: closed
+        ? `Tab "${tabNameToClose}" permanently closed. History deleted.`
+        : `Tab "${tabNameToClose}" not found.`,
+    };
   }
 
   // /fresh <folder>
@@ -207,7 +241,10 @@ export async function handleSharedCommand(
     if (!project) return { handled: true, response: `Folder "${folderName}" not found.` };
     const freshTabName = `${folderName}-${Date.now().toString(36).slice(-4)}`;
     setUserContext(userId, project.name, freshTabName);
-    return { handled: true, response: `Fresh start in "${folderName}" (tab: ${freshTabName})\nSend your message now.` };
+    return {
+      handled: true,
+      response: `Fresh start in "${folderName}" (tab: ${freshTabName})\nSend your message now.`,
+    };
   }
 
   // /history [date|yesterday]
@@ -231,7 +268,10 @@ export async function handleSharedCommand(
     const { getAllKnowledge, formatKnowledgeForContext } = await import('../knowledge/index.js');
     const entries = getAllKnowledge();
     if (entries.length === 0) {
-      return { handled: true, response: 'No knowledge stored yet. Beecork learns from your conversations.' };
+      return {
+        handled: true,
+        response: 'No knowledge stored yet. Beecork learns from your conversations.',
+      };
     }
     return { handled: true, response: formatKnowledgeForContext(entries).slice(0, 4000) };
   }

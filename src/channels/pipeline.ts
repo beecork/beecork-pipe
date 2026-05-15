@@ -80,10 +80,21 @@ export async function processInboundMessage(opts: PipelineOptions): Promise<Pipe
   } = opts;
 
   // 1. Parse tab name and prompt from the message text
-  let { tabName, prompt: rawPrompt } = parseTabMessage(text);
+  const parsed = parseTabMessage(text);
+  const rawPrompt = parsed.prompt;
+  let tabName = parsed.tabName;
 
-  // Allow channel to override tab name (group tabs, thread tabs, etc.)
+  // Allow channel to override tab name (group tabs, thread tabs, etc.).
+  // Validate centrally so each channel doesn't need its own check — keeps the
+  // CLAUDE.md "validation is centralized" rule honest. `default` is allowed.
   if (overrideTabName) {
+    if (overrideTabName !== 'default') {
+      const { validateTabName } = await import('../config.js');
+      const overrideErr = validateTabName(overrideTabName);
+      if (overrideErr) {
+        return { responseText: `Invalid tab name: ${overrideErr}`, tabName, isError: true };
+      }
+    }
     tabName = overrideTabName;
   }
 
@@ -124,9 +135,7 @@ export async function processInboundMessage(opts: PipelineOptions): Promise<Pipe
 
   // 6. Build response text
   const isError = result.error;
-  const responseText = isError
-    ? `Error: ${result.text}`
-    : result.text || '(empty response)';
+  const responseText = isError ? `Error: ${result.text}` : result.text || '(empty response)';
 
   // 7. TTS voice reply (shared logic)
   let audioPath: string | undefined;

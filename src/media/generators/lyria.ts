@@ -1,14 +1,27 @@
 import { saveMedia } from '../store.js';
-import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
+import type {
+  MediaGenerator,
+  MediaType,
+  GenerateOptions,
+  GenerateResult,
+  GeminiGenerateContentResponse,
+} from '../types.js';
 
 export class LyriaGenerator implements MediaGenerator {
   readonly id = 'lyria';
   readonly name = 'Google Lyria';
   readonly supportedTypes: MediaType[] = ['music'];
 
-  constructor(private apiKey: string, private model: string = 'lyria-3-clip') {}
+  constructor(
+    private apiKey: string,
+    private model: string = 'lyria-3-clip',
+  ) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'music') throw new Error('Lyria only supports music generation');
 
     const useProModel = (options?.duration && options.duration > 30) || this.model.includes('pro');
@@ -26,7 +39,7 @@ export class LyriaGenerator implements MediaGenerator {
           },
         }),
         signal: AbortSignal.timeout(300000), // 5 min for full songs
-      }
+      },
     );
 
     if (!response.ok) {
@@ -34,8 +47,8 @@ export class LyriaGenerator implements MediaGenerator {
       throw new Error(`Lyria error ${response.status}: ${err.slice(0, 200)}`);
     }
 
-    const data = await response.json() as any;
-    const audioPart = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
+    const data = (await response.json()) as GeminiGenerateContentResponse;
+    const audioPart = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
     if (!audioPart?.inlineData?.data) {
       throw new Error('Lyria returned no audio data');
     }

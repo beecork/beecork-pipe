@@ -7,6 +7,26 @@ interface Migration {
   up: string;
 }
 
+/*
+ * Migration authoring conventions:
+ *
+ * - Every migration runs inside a single transaction so partial failures are
+ *   atomically rolled back. Idempotency checks for ALTER TABLE ADD/DROP COLUMN
+ *   are performed inline below.
+ *
+ * - For destructive reshapes (column type change, rename, etc.) follow the
+ *   SQLite-recommended pattern, all in one migration so the transaction wraps
+ *   it cleanly:
+ *
+ *     CREATE TABLE new_X (...);
+ *     INSERT INTO new_X (a, b, c) SELECT a, b, c FROM X;
+ *     DROP TABLE X;
+ *     ALTER TABLE new_X RENAME TO X;
+ *
+ *   AVOID `DROP TABLE X; CREATE TABLE X (...)` without a copy step — migration
+ *   v13 did this and silently nuked user-created rows. The audit history flags
+ *   that as a one-off; do not repeat it.
+ */
 const MIGRATIONS: Migration[] = [
   {
     version: 2,
@@ -107,7 +127,7 @@ const MIGRATIONS: Migration[] = [
   {
     version: 8,
     description: 'Add system_prompt column to tabs',
-    up: "ALTER TABLE tabs ADD COLUMN system_prompt TEXT DEFAULT NULL",
+    up: 'ALTER TABLE tabs ADD COLUMN system_prompt TEXT DEFAULT NULL',
   },
   {
     version: 9,
@@ -257,7 +277,8 @@ const MIGRATIONS: Migration[] = [
   },
   {
     version: 24,
-    description: 'Rip out multi-user scaffolding (never enforced; everything was hardcoded user_id="local")',
+    description:
+      'Rip out multi-user scaffolding (never enforced; everything was hardcoded user_id="local")',
     up: `
       DROP TABLE IF EXISTS identities;
       DROP TABLE IF EXISTS users;
@@ -273,6 +294,32 @@ const MIGRATIONS: Migration[] = [
     description: 'Drop idx_memories_content — leading-wildcard LIKE cannot use a B-tree index',
     up: 'DROP INDEX IF EXISTS idx_memories_content',
   },
+  {
+    version: 26,
+    description:
+      'Add status column to pending_messages for 3-state lifecycle (pending → processing → done|failed); allow nullable tab_name for notifications',
+    up: `
+      ALTER TABLE pending_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
+      UPDATE pending_messages SET status = 'done' WHERE processed = 1;
+      UPDATE pending_messages SET status = 'pending' WHERE processed = 0;
+      CREATE INDEX IF NOT EXISTS idx_pending_status_created ON pending_messages(status, created_at);
+    `,
+  },
+  {
+    version: 27,
+    description:
+      'Add indexes for delegations (source_tab, target_tab) to prevent scans on completion lookup',
+    up: `
+      CREATE INDEX IF NOT EXISTS idx_delegations_source ON delegations(source_tab, status);
+      CREATE INDEX IF NOT EXISTS idx_delegations_target ON delegations(target_tab, status, created_at);
+    `,
+  },
+  {
+    version: 28,
+    description:
+      'Add idx_tabs_working_dir for the per-message routing query that finds tabs by project path',
+    up: 'CREATE INDEX IF NOT EXISTS idx_tabs_working_dir ON tabs(working_dir, last_activity_at)',
+  },
 ];
 
 export function runMigrations(db: Database.Database): void {
@@ -284,7 +331,9 @@ export function runMigrations(db: Database.Database): void {
   `);
 
   // Get current version
-  let row = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
+  let row = db.prepare('SELECT version FROM schema_version').get() as
+    | { version: number }
+    | undefined;
   if (!row) {
     db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(1);
     row = { version: 1 };
@@ -304,39 +353,60 @@ export function runMigrations(db: Database.Database): void {
 
     // Split multi-statement migrations and apply each safely
     // (handles partial failures from previous runs where some statements succeeded)
-    const statements = migration.up.split(';').map(s => s.trim()).filter(s => s.length > 0);
+    const statements = migration.up
+      .split(';')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
 
-    for (const stmt of statements) {
-      try {
-        // For ALTER TABLE ADD COLUMN, check if column already exists first
-        const addMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
-        if (addMatch) {
-          const columns = db.pragma(`table_info(${addMatch[1]})`) as Array<{ name: string }>;
-          if (columns.some(c => c.name === addMatch[2])) {
-            logger.debug(`Migration v${migration.version}: column ${addMatch[1]}.${addMatch[2]} already exists, skipping`);
+    // Wrap the whole migration in a transaction so a mid-statement failure
+    // rolls back to the pre-migration state. The schema_version bump is the
+    // final statement inside the transaction, so an aborted migration won't
+    // leave the DB in a half-applied state with the version already bumped.
+    const applyMigration = db.transaction(() => {
+      for (const stmt of statements) {
+        try {
+          // For ALTER TABLE ADD COLUMN, check if column already exists first
+          const addMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)/i);
+          if (addMatch) {
+            const columns = db.pragma(`table_info(${addMatch[1]})`) as Array<{ name: string }>;
+            if (columns.some((c) => c.name === addMatch[2])) {
+              logger.debug(
+                `Migration v${migration.version}: column ${addMatch[1]}.${addMatch[2]} already exists, skipping`,
+              );
+              continue;
+            }
+          }
+          // For ALTER TABLE DROP COLUMN, skip if column already gone
+          const dropMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+DROP\s+COLUMN\s+(\S+)/i);
+          if (dropMatch) {
+            const columns = db.pragma(`table_info(${dropMatch[1]})`) as Array<{ name: string }>;
+            if (!columns.some((c) => c.name === dropMatch[2])) {
+              logger.debug(
+                `Migration v${migration.version}: column ${dropMatch[1]}.${dropMatch[2]} already absent, skipping`,
+              );
+              continue;
+            }
+          }
+          db.exec(stmt);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (
+            msg.includes('already exists') ||
+            msg.includes('no such column') ||
+            msg.includes('no such table') ||
+            msg.includes('no such index')
+          ) {
+            logger.debug(
+              `Migration v${migration.version}: object already in target state, skipping statement`,
+            );
             continue;
           }
+          throw err;
         }
-        // For ALTER TABLE DROP COLUMN, skip if column already gone
-        const dropMatch = stmt.match(/ALTER\s+TABLE\s+(\S+)\s+DROP\s+COLUMN\s+(\S+)/i);
-        if (dropMatch) {
-          const columns = db.pragma(`table_info(${dropMatch[1]})`) as Array<{ name: string }>;
-          if (!columns.some(c => c.name === dropMatch[2])) {
-            logger.debug(`Migration v${migration.version}: column ${dropMatch[1]}.${dropMatch[2]} already absent, skipping`);
-            continue;
-          }
-        }
-        db.exec(stmt);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('already exists') || msg.includes('no such column') || msg.includes('no such table') || msg.includes('no such index')) {
-          logger.debug(`Migration v${migration.version}: object already in target state, skipping statement`);
-          continue;
-        }
-        throw err;
       }
-    }
+      db.prepare('UPDATE schema_version SET version = ?').run(migration.version);
+    });
 
-    db.prepare('UPDATE schema_version SET version = ?').run(migration.version);
+    applyMigration();
   }
 }

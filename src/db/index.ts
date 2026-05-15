@@ -4,6 +4,7 @@ import path from 'node:path';
 import Database from 'better-sqlite3';
 import { getDbPath, ensureBeecorkDirs, expandHome } from '../util/paths.js';
 import { runMigrations } from './migrations.js';
+import { openDb } from './connection.js';
 import { logger } from '../util/logger.js';
 
 const SCHEMA = `
@@ -58,27 +59,60 @@ export function getDb(): Database.Database {
 
   ensureBeecorkDirs();
   const dbPath = getDbPath();
-  db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.pragma('busy_timeout = 5000');
+  db = openDb(dbPath, { enforcePerms: true });
   db.exec(SCHEMA);
   runMigrations(db);
 
-  // Periodic WAL checkpointing + table cleanup
-  walInterval = setInterval(() => {
-    try {
-      db?.pragma('wal_checkpoint(PASSIVE)');
-      // Prune old permission history (keep last 1000 entries)
-      db?.exec('DELETE FROM permission_history WHERE created_at < (SELECT created_at FROM permission_history ORDER BY created_at DESC LIMIT 1 OFFSET 999)');
-      db?.exec("DELETE FROM activity_log WHERE created_at < datetime('now', '-90 days')");
-      // Prune unused routing patterns so the per-message learned-routing scan
-      // doesn't grow unbounded. Keep patterns that have been hit recently or often.
-      db?.exec("DELETE FROM routing_preferences WHERE hit_count < 3 AND created_at < datetime('now', '-30 days')");
-    } catch (err) {
-      logger.warn('WAL checkpoint/cleanup error:', err);
-    }
-  }, 30 * 60 * 1000); // every 30 minutes
+  // Periodic WAL checkpointing + table cleanup. Cheap precheck `LIMIT 1`
+  // SELECTs skip the DELETE entirely when nothing matches — saves the WAL
+  // write on a quiet system.
+  walInterval = setInterval(
+    () => {
+      try {
+        db?.pragma('wal_checkpoint(PASSIVE)');
+        if (!db) return;
+
+        // Prune old permission history (keep last 1000 entries). Two-pass: count
+        // first, then bulk-delete the oldest N. The previous correlated-subquery
+        // version re-evaluated the OFFSET 999 row per candidate, which scaled
+        // poorly past ~5k rows.
+        const permCount = (
+          db.prepare('SELECT COUNT(*) as c FROM permission_history').get() as { c: number }
+        ).c;
+        if (permCount > 1000) {
+          db.prepare(
+            `DELETE FROM permission_history WHERE id IN (
+             SELECT id FROM permission_history ORDER BY created_at ASC LIMIT ?
+           )`,
+          ).run(permCount - 1000);
+        }
+
+        // Activity log: only DELETE if a candidate row exists, otherwise no-op.
+        const oldActivity = db
+          .prepare(
+            "SELECT 1 FROM activity_log WHERE created_at < datetime('now', '-90 days') LIMIT 1",
+          )
+          .get();
+        if (oldActivity)
+          db.exec("DELETE FROM activity_log WHERE created_at < datetime('now', '-90 days')");
+
+        // Routing preferences: same precheck pattern.
+        const stalePref = db
+          .prepare(
+            "SELECT 1 FROM routing_preferences WHERE hit_count < 3 AND created_at < datetime('now', '-30 days') LIMIT 1",
+          )
+          .get();
+        if (stalePref) {
+          db.exec(
+            "DELETE FROM routing_preferences WHERE hit_count < 3 AND created_at < datetime('now', '-30 days')",
+          );
+        }
+      } catch (err) {
+        logger.warn('WAL checkpoint/cleanup error:', err);
+      }
+    },
+    30 * 60 * 1000,
+  ); // every 30 minutes
 
   return db;
 }
@@ -90,8 +124,13 @@ export interface CreateTabOptions {
 }
 
 /** Shared tab record creation — used by dashboard, MCP, and TabManager */
-export function createTabRecord(db: Database.Database, opts: CreateTabOptions): { id: string; name: string; created: boolean } {
-  const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(opts.name) as { name: string } | undefined;
+export function createTabRecord(
+  db: Database.Database,
+  opts: CreateTabOptions,
+): { id: string; name: string; created: boolean } {
+  const existing = db.prepare('SELECT name FROM tabs WHERE name = ?').get(opts.name) as
+    | { name: string }
+    | undefined;
   if (existing) return { id: '', name: opts.name, created: false };
 
   // Resolve and validate workingDir. Done here so every caller (CLI, dashboard, MCP)
@@ -107,13 +146,16 @@ export function createTabRecord(db: Database.Database, opts: CreateTabOptions): 
 
   const id = crypto.randomUUID();
   db.prepare(
-    'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)'
+    'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, ?)',
   ).run(id, opts.name, crypto.randomUUID(), 'idle', dir, opts.systemPrompt || null);
   return { id, name: opts.name, created: true };
 }
 
 export function closeDb(): void {
-  if (walInterval) { clearInterval(walInterval); walInterval = null; }
+  if (walInterval) {
+    clearInterval(walInterval);
+    walInterval = null;
+  }
   if (db) {
     db.close();
     db = null;

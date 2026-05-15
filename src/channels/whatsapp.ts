@@ -1,3 +1,16 @@
+/*
+ * WhatsApp integration via @whiskeysockets/baileys.
+ *
+ * baileys is a peer-optional dependency loaded by dynamic import, and its
+ * runtime types are intentionally loose (the lib uses heavy union/index
+ * types that don't survive serialization across the dynamic-import boundary).
+ * Trying to type every variant of Baileys' message/connection shapes would
+ * either pull baileys into the static graph (bloating non-WhatsApp installs)
+ * or require maintaining a parallel shim. We accept `any` at this trust
+ * boundary; runtime validation lives in the descriptors table inside
+ * messages.upsert.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import fs from 'node:fs';
 import { logger } from '../util/logger.js';
 import { saveMedia, isOversized } from '../media/store.js';
@@ -5,7 +18,7 @@ import { sendChunkedResponse } from './send-helpers.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { processInboundMessage } from './pipeline.js';
 import { isChannelAdmin } from './admin.js';
-import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import type { Channel, ChannelContext, MediaAttachment, SendOptions } from './types.js';
 import { VoiceState } from './voice-state.js';
 
 const WHATSAPP_MAX_LENGTH = 8192;
@@ -14,8 +27,6 @@ export class WhatsAppChannel implements Channel {
   readonly id = 'whatsapp';
   readonly name = 'WhatsApp';
   readonly maxMessageLength = WHATSAPP_MAX_LENGTH;
-  readonly supportsStreaming = false;
-  readonly supportsMedia = true;
 
   private sock: unknown = null;
   private ctx: ChannelContext;
@@ -30,13 +41,56 @@ export class WhatsAppChannel implements Channel {
     this.allowedNumbers = new Set(ctx.config.whatsapp?.allowedNumbers ?? []);
   }
 
+  /**
+   * Schedule the next reconnect with exponential backoff. Unlike the previous
+   * inline setTimeout, this path retries when `start()` itself rejects (auth
+   * failure, baileys init throw, etc.) instead of going permanently silent
+   * after a single failed attempt.
+   */
+  private scheduleReconnect(): void {
+    this.reconnectAttempts++;
+    if (this.reconnectAttempts > this.maxReconnectAttempts) {
+      logger.error(
+        `WhatsApp reconnect failed after ${this.maxReconnectAttempts} attempts, giving up`,
+      );
+      this.ctx
+        .notifyCallback?.(
+          '⚠️ WhatsApp disconnected after 10 reconnection attempts. Restart daemon to reconnect.',
+        )
+        .catch((err) => logger.error('Failed to send WhatsApp disconnect notification:', err));
+      return;
+    }
+    const delayIdx = Math.min(this.reconnectAttempts - 1, this.backoffDelays.length - 1);
+    const delay = this.backoffDelays[delayIdx];
+    logger.warn(
+      `WhatsApp connection closed, reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
+    );
+    setTimeout(() => {
+      this.start().catch((err) => {
+        logger.error('WhatsApp reconnect attempt failed:', err);
+        // Recurse via scheduleReconnect so backoff keeps escalating instead of
+        // silently dropping the reconnect chain after one failed start().
+        this.scheduleReconnect();
+      });
+    }, delay);
+  }
+
   async start(): Promise<void> {
     // Initialize voice providers (STT + TTS)
     this.voice.init(this.ctx.config);
 
     try {
-      const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, downloadMediaMessage, fetchLatestBaileysVersion } = await import('@whiskeysockets/baileys');
-      const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? `${process.env.HOME}/.beecork/whatsapp-session`;
+      const {
+        default: makeWASocket,
+        useMultiFileAuthState,
+        DisconnectReason,
+        downloadMediaMessage,
+        fetchLatestBaileysVersion,
+      } = await import('@whiskeysockets/baileys');
+      const { getWhatsappSessionPath } = await import('../util/paths.js');
+      // Use the centralized path helper — the previous fallback hard-coded
+      // process.env.HOME which bypassed BEECORK_HOME for tests/isolation.
+      const sessionPath = this.ctx.config.whatsapp?.sessionPath ?? getWhatsappSessionPath();
       fs.mkdirSync(sessionPath, { recursive: true, mode: 0o700 });
 
       const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
@@ -61,27 +115,15 @@ export class WhatsAppChannel implements Channel {
             (qrcodeTerminal.default || qrcodeTerminal).generate(qr, { small: true });
             logger.info('WhatsApp QR code displayed — scan with your phone');
           } catch {
-            logger.warn('WhatsApp QR code available but could not render. Install qrcode-terminal.');
+            logger.warn(
+              'WhatsApp QR code available but could not render. Install qrcode-terminal.',
+            );
           }
         }
         if (connection === 'close') {
           const reason = (lastDisconnect?.error as any)?.output?.statusCode;
           if (reason !== DisconnectReason.loggedOut) {
-            this.reconnectAttempts++;
-            if (this.reconnectAttempts > this.maxReconnectAttempts) {
-              logger.error(`WhatsApp reconnect failed after ${this.maxReconnectAttempts} attempts, giving up`);
-              this.ctx.notifyCallback?.('⚠️ WhatsApp disconnected after 10 reconnection attempts. Restart daemon to reconnect.')
-                .catch(err => logger.error('Failed to send WhatsApp disconnect notification:', err));
-              return;
-            }
-            const delayIdx = Math.min(this.reconnectAttempts - 1, this.backoffDelays.length - 1);
-            const delay = this.backoffDelays[delayIdx];
-            logger.warn(`WhatsApp connection closed, reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
-            setTimeout(() => {
-              this.start().catch(err => {
-                logger.error('WhatsApp reconnect failed:', err);
-              });
-            }, delay);
+            this.scheduleReconnect();
           } else {
             logger.error('WhatsApp logged out. Please re-scan QR code.');
           }
@@ -100,14 +142,20 @@ export class WhatsAppChannel implements Channel {
 
         // Rate limit check
         if (!inboundLimiter.check(this.id)) {
-          await sock.sendMessage(sender, { text: "I'm receiving too many messages right now. Please wait a moment." }).catch(() => {});
+          await sock
+            .sendMessage(sender, {
+              text: "I'm receiving too many messages right now. Please wait a moment.",
+            })
+            .catch(() => {});
           return;
         }
 
-        const text = msg.message.conversation ||
+        const text =
+          msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
           msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption || '';
+          msg.message.videoMessage?.caption ||
+          '';
 
         // Download media (in parallel). Descriptor map collapses what used to be
         // 5 near-identical blocks into one loop. Each descriptor describes how to
@@ -167,15 +215,22 @@ export class WhatsAppChannel implements Channel {
             downloadMediaMessage(msg, 'buffer', {})
               .then((buffer: any) => {
                 if (!buffer || isOversized(buffer.length)) return null;
-                try { return d.build(msg.message, buffer as Buffer); } catch { return null; }
+                try {
+                  return d.build(msg.message, buffer as Buffer);
+                } catch {
+                  return null;
+                }
               })
-              .catch(() => null)
+              .catch(() => null),
           );
         }
         const waResults = await Promise.allSettled(waDownloadTasks);
         const media: MediaAttachment[] = waResults
-          .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
-          .map(r => r.value!);
+          .filter(
+            (r): r is PromiseFulfilledResult<MediaAttachment | null> =>
+              r.status === 'fulfilled' && r.value !== null,
+          )
+          .map((r) => r.value!);
 
         // Transcribe voice messages if STT is configured
         await this.voice.transcribe(media);
@@ -188,12 +243,19 @@ export class WhatsAppChannel implements Channel {
           // Shared command handler (covers /tabs, /stop, /projects, /project, /newproject, /close, /fresh, etc.)
           if (text.startsWith('/')) {
             const { handleSharedCommand } = await import('./command-handler.js');
-            const cmdResult = await handleSharedCommand({
-              userId: waUserId,
-              text,
-              isAdmin: isChannelAdmin(this.allowedNumbers, waUserId, this.ctx.config.whatsapp?.adminNumber),
-              channelId: 'whatsapp',
-            }, this.ctx.tabManager);
+            const cmdResult = await handleSharedCommand(
+              {
+                userId: waUserId,
+                text,
+                isAdmin: isChannelAdmin(
+                  this.allowedNumbers,
+                  waUserId,
+                  this.ctx.config.whatsapp?.adminNumber,
+                ),
+                channelId: 'whatsapp',
+              },
+              this.ctx.tabManager,
+            );
             if (cmdResult.handled) {
               if (cmdResult.response) await sock.sendMessage(sender, { text: cmdResult.response });
               return;
@@ -223,15 +285,24 @@ export class WhatsAppChannel implements Channel {
 
           // Send voice reply if TTS generated audio
           if (pipelineResult.audioPath) {
-            await sock.sendMessage(sender, { audio: { url: pipelineResult.audioPath }, mimetype: 'audio/ogg; codecs=opus', ptt: true });
+            await sock.sendMessage(sender, {
+              audio: { url: pipelineResult.audioPath },
+              mimetype: 'audio/ogg; codecs=opus',
+              ptt: true,
+            });
             if (pipelineResult.voiceOnly) return;
           }
 
           await this.sendResponse(sender, pipelineResult.responseText, pipelineResult.tabName);
         } catch (err) {
           logger.error('WhatsApp message handler error:', err);
-          await sock.sendMessage(sender, { text: 'Something went wrong processing your message. Check daemon logs for details.' })
-            .catch((sendErr: unknown) => logger.error('WhatsApp: failed to send fallback error message:', sendErr));
+          await sock
+            .sendMessage(sender, {
+              text: 'Something went wrong processing your message. Check daemon logs for details.',
+            })
+            .catch((sendErr: unknown) =>
+              logger.error('WhatsApp: failed to send fallback error message:', sendErr),
+            );
         }
       });
     } catch (err) {
@@ -256,7 +327,7 @@ export class WhatsAppChannel implements Channel {
       text,
       maxLength: WHATSAPP_MAX_LENGTH,
       retryLabel: 'whatsapp-send',
-      sendChunk: chunk => sock.sendMessage(peerId, { text: chunk }),
+      sendChunk: (chunk) => sock.sendMessage(peerId, { text: chunk }),
     });
   }
 
@@ -279,10 +350,6 @@ export class WhatsAppChannel implements Channel {
     await sock.sendPresenceUpdate(status, peerId).catch(() => {});
   }
 
-  onMessage(_handler: InboundMessageHandler): void {
-    // Messages are handled directly in start()
-  }
-
   // ─── Private ───
 
   private async sendResponse(jid: string, text: string, tabName?: string): Promise<void> {
@@ -293,7 +360,7 @@ export class WhatsAppChannel implements Channel {
         tabName,
         maxLength: WHATSAPP_MAX_LENGTH,
         retryLabel: 'whatsapp-send',
-        sendChunk: chunk => sock.sendMessage(jid, { text: chunk }),
+        sendChunk: (chunk) => sock.sendMessage(jid, { text: chunk }),
       });
     } catch (err) {
       logger.error(`WhatsApp delivery failed for ${jid}:`, err);

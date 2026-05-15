@@ -1,4 +1,12 @@
-export type EventType = 'task_started' | 'task_completed' | 'task_failed' | 'watcher_triggered' | 'media_generated' | 'delegation_completed' | 'user_command' | 'system_event';
+export type EventType =
+  | 'task_started'
+  | 'task_completed'
+  | 'task_failed'
+  | 'watcher_triggered'
+  | 'media_generated'
+  | 'delegation_completed'
+  | 'user_command'
+  | 'system_event';
 
 export interface ActivityEvent {
   id: string;

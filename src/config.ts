@@ -29,7 +29,6 @@ const DEFAULT_CONFIG: BeecorkConfig = {
   },
   memory: {
     dbPath: '~/.beecork/memory.db',
-    maxLongTermEntries: 1000,
   },
   projectScanPaths: [...DEFAULT_PROJECT_SCAN_PATHS],
   deployment: 'local',
@@ -75,9 +74,6 @@ export function resolveWorkingDir(tabName: string): string {
   return expandHome(tabConfig.workingDir);
 }
 
-// getAdminUserId removed — admin check now lives in channels/admin.ts (isChannelAdmin)
-// so all 3 channels share the same policy instead of each reimplementing.
-
 const TAB_NAME_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,31}$/;
 
 export function validateTabName(name: string): string | null {
@@ -113,10 +109,7 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
     tabs: {
       default: { ...DEFAULT_TAB_CONFIG },
       ...Object.fromEntries(
-        Object.entries(raw.tabs ?? {}).map(([k, v]) => [
-          k,
-          { ...DEFAULT_TAB_CONFIG, ...v },
-        ])
+        Object.entries(raw.tabs ?? {}).map(([k, v]) => [k, { ...DEFAULT_TAB_CONFIG, ...v }]),
       ),
     },
     memory: {
@@ -124,9 +117,10 @@ function mergeWithDefaults(raw: Partial<BeecorkConfig>): BeecorkConfig {
       ...raw.memory,
     },
     // Fall back to legacy pipe.projectScanPaths so old configs keep working
-    projectScanPaths: raw.projectScanPaths
-      ?? (raw as { pipe?: { projectScanPaths?: string[] } }).pipe?.projectScanPaths
-      ?? [...DEFAULT_PROJECT_SCAN_PATHS],
+    projectScanPaths: raw.projectScanPaths ??
+      (raw as { pipe?: { projectScanPaths?: string[] } }).pipe?.projectScanPaths ?? [
+        ...DEFAULT_PROJECT_SCAN_PATHS,
+      ],
     deployment: raw.deployment ?? DEFAULT_CONFIG.deployment,
   };
 }

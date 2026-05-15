@@ -7,7 +7,10 @@ export interface TTSProvider {
 
 /** OpenAI TTS API provider */
 export class OpenAITTSProvider implements TTSProvider {
-  constructor(private apiKey: string, private voice: string = 'alloy') {}
+  constructor(
+    private apiKey: string,
+    private voice: string = 'alloy',
+  ) {}
 
   async synthesize(text: string): Promise<string> {
     // Truncate very long text (TTS has limits)
@@ -16,7 +19,7 @@ export class OpenAITTSProvider implements TTSProvider {
     const response = await fetch('https://api.openai.com/v1/audio/speech', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -39,7 +42,10 @@ export class OpenAITTSProvider implements TTSProvider {
 
 /** ElevenLabs TTS provider */
 export class ElevenLabsTTSProvider implements TTSProvider {
-  constructor(private apiKey: string, private voiceId: string = '21m00Tcm4TlvDq8ikWAM') {}
+  constructor(
+    private apiKey: string,
+    private voiceId: string = '21m00Tcm4TlvDq8ikWAM',
+  ) {}
 
   async synthesize(text: string): Promise<string> {
     const truncated = text.slice(0, 5000);
@@ -68,7 +74,11 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 }
 
 /** Create TTS provider from config */
-export function createTTSProvider(config: { provider: string; apiKey?: string; voice?: string }): TTSProvider | null {
+export function createTTSProvider(config: {
+  provider: string;
+  apiKey?: string;
+  voice?: string;
+}): TTSProvider | null {
   switch (config.provider) {
     case 'openai':
       if (!config.apiKey) {

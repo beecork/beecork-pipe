@@ -30,7 +30,9 @@ export class VoiceState {
     if (this.warmedUp || !this.stt) return;
     try {
       this.stt.warmup?.();
-    } catch { /* warmup is best-effort */ }
+    } catch {
+      /* warmup is best-effort */
+    }
     this.warmedUp = true;
   }
 

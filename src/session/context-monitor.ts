@@ -4,8 +4,8 @@ import type { StreamUsage } from '../types.js';
 export type ContextAction = 'ok' | 'warn' | 'checkpoint';
 
 const DEFAULT_CONTEXT_WINDOW = 200_000; // Claude's context window in tokens
-const WARNING_THRESHOLD = 0.80;
-const CHECKPOINT_THRESHOLD = 0.90;
+const WARNING_THRESHOLD = 0.8;
+const CHECKPOINT_THRESHOLD = 0.9;
 
 export class ContextMonitor {
   private cumulativeTokens = 0;

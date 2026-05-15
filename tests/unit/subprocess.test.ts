@@ -24,7 +24,7 @@ vi.mock('uuid', () => ({
 
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
-import { ClaudeSubprocess } from '../../src/session/subprocess.js';
+import { ClaudeSubprocess, _resetMcpConfigExistsCacheForTests } from '../../src/session/subprocess.js';
 import type { BeecorkConfig } from '../../src/types.js';
 
 const mockConfig: BeecorkConfig = {
@@ -57,6 +57,9 @@ function makeMockProc() {
 describe('ClaudeSubprocess', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Subprocess caches the mcp-config existsSync result for production
+    // hot-path use; tests need to reset it between cases that flip the mock.
+    _resetMcpConfigExistsCacheForTests();
   });
 
   it('should generate a session ID when none provided', () => {

@@ -5,14 +5,28 @@ import { logger } from '../util/logger.js';
 import { getMcpConfigPath } from '../util/paths.js';
 import type { BeecorkConfig, StreamEvent } from '../types.js';
 
+// Cache the MCP-config existence check. The file is created at setup time and
+// stable for the daemon's lifetime; we don't need to stat() it per spawn.
+let mcpConfigExistsCache: boolean | null = null;
+function mcpConfigExists(): boolean {
+  if (mcpConfigExistsCache !== null) return mcpConfigExistsCache;
+  mcpConfigExistsCache = fs.existsSync(getMcpConfigPath());
+  return mcpConfigExistsCache;
+}
+
+/** Test-only — reset the existsSync cache between test runs that toggle the mock. */
+export function _resetMcpConfigExistsCacheForTests(): void {
+  mcpConfigExistsCache = null;
+}
+
 const BEECORK_SYSTEM_PROMPT = `You are running inside Beecork, an always-on infrastructure for Claude Code.
 
 You have these special MCP tools available:
 - beecork_remember: Store important facts for future sessions (preferences, server addresses, decisions, outcomes)
 - beecork_recall: Search stored memories — ALWAYS call this at the start of complex tasks
-- beecork_cron_create: Schedule recurring tasks (types: "at" for one-time, "every" for interval like "30m", "cron" for expressions like "0 9 * * 1")
-- beecork_cron_list: List scheduled tasks
-- beecork_cron_delete: Remove a scheduled task
+- beecork_task_create: Schedule recurring tasks (types: "at" for one-time, "every" for interval like "30m", "cron" for expressions like "0 9 * * 1")
+- beecork_task_list: List scheduled tasks
+- beecork_task_delete: Remove a scheduled task
 - beecork_tab_create: Create a new virtual tab for parallel work
 - beecork_tab_list: List all tabs
 - beecork_send_message: Send a message to another tab
@@ -23,7 +37,7 @@ Guidelines:
 - You are running unattended. Be thorough and complete tasks fully.
 - Always call beecork_recall at the start of any task to check relevant memories.
 - Always call beecork_remember when you learn something important.
-- When asked for recurring tasks, use beecork_cron_create.
+- When asked for recurring tasks, use beecork_task_create.
 - Use beecork_notify for progress updates during long tasks.`;
 
 export interface SubprocessCallbacks {
@@ -49,7 +63,11 @@ export class ClaudeSubprocess {
     this.sessionId = sessionId ?? uuidv4();
   }
 
-  async send(prompt: string, callbacks: SubprocessCallbacks, resume: boolean = false): Promise<void> {
+  async send(
+    prompt: string,
+    callbacks: SubprocessCallbacks,
+    resume: boolean = false,
+  ): Promise<void> {
     if (this.proc) {
       throw new Error(`Subprocess for tab "${this.tabName}" is already running`);
     }
@@ -87,20 +105,33 @@ export class ClaudeSubprocess {
     this.proc.stderr!.on('data', (chunk: Buffer) => {
       const text = chunk.toString().trim();
       if (text) {
-        logger.debug(`[${this.tabName}] stderr: ${text.slice(0, 500)}`);
+        // claude prints auth failures, rate limits, license issues, and other
+        // operational errors to stderr. Surface at warn so they reach daemon.log
+        // at the default level — debugging "why did claude exit?" otherwise
+        // requires recompiling with a different log level.
+        logger.warn(`[${this.tabName}] claude stderr: ${text.slice(0, 500)}`);
       }
     });
 
     this.proc.on('error', (err) => {
       this.proc = null;
-      if (this.runtimeTimer) { clearTimeout(this.runtimeTimer); this.runtimeTimer = null; }
+      if (this.runtimeTimer) {
+        clearTimeout(this.runtimeTimer);
+        this.runtimeTimer = null;
+      }
       callbacks.onError(err);
     });
 
     this.proc.on('exit', (code) => {
       this.proc = null;
-      if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
-      if (this.runtimeTimer) { clearTimeout(this.runtimeTimer); this.runtimeTimer = null; }
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
+      if (this.runtimeTimer) {
+        clearTimeout(this.runtimeTimer);
+        this.runtimeTimer = null;
+      }
       logger.info(`[${this.tabName}] Claude subprocess exited (code: ${code})`);
       callbacks.onExit(code);
     });
@@ -111,8 +142,12 @@ export class ClaudeSubprocess {
     if (maxRuntimeMs > 0) {
       this.runtimeTimer = setTimeout(() => {
         if (!this.proc) return;
-        logger.warn(`[${this.tabName}] Subprocess exceeded maxRuntimeMs (${maxRuntimeMs}ms) — killing`);
-        callbacks.onError(new Error(`Subprocess timed out after ${Math.round(maxRuntimeMs / 1000)}s`));
+        logger.warn(
+          `[${this.tabName}] Subprocess exceeded maxRuntimeMs (${maxRuntimeMs}ms) — killing`,
+        );
+        callbacks.onError(
+          new Error(`Subprocess timed out after ${Math.round(maxRuntimeMs / 1000)}s`),
+        );
         this.kill();
       }, maxRuntimeMs);
     }
@@ -124,7 +159,11 @@ export class ClaudeSubprocess {
     this.proc.kill('SIGTERM');
     const proc = this.proc;
     this.killTimer = setTimeout(() => {
-      try { proc.kill('SIGKILL'); } catch { /* already dead */ }
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* already dead */
+      }
     }, 5000);
   }
 
@@ -139,15 +178,18 @@ export class ClaudeSubprocess {
   private buildArgs(prompt: string, resume: boolean): string[] {
     const args = [
       '-p',
-      '--output-format', 'stream-json',
+      '--output-format',
+      'stream-json',
       '--verbose',
       ...this.config.claudeCode.defaultFlags,
     ];
 
-    // Only add MCP config if the file exists
-    const mcpConfig = getMcpConfigPath();
-    if (fs.existsSync(mcpConfig)) {
-      args.push('--mcp-config', mcpConfig);
+    // Only add MCP config if the file exists. existsSync result is cached at
+    // module scope — the path is stable for the daemon's lifetime, so doing
+    // this once-per-process saves a syscall per claude spawn (every message,
+    // every task firing, every watcher trigger).
+    if (mcpConfigExists()) {
+      args.push('--mcp-config', getMcpConfigPath());
     }
 
     // Inject Beecork system context so Claude knows about available tools

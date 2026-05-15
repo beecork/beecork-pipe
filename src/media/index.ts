@@ -8,5 +8,5 @@ import type { MediaGeneratorConfig } from '../types.js';
 
 export function initMediaGenerators(configs?: MediaGeneratorConfig[]): MediaGenerator[] {
   if (!configs || configs.length === 0) return [];
-  return configs.map(c => createMediaGenerator(c)).filter((g): g is MediaGenerator => g !== null);
+  return configs.map((c) => createMediaGenerator(c)).filter((g): g is MediaGenerator => g !== null);
 }

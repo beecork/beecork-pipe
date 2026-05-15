@@ -8,7 +8,11 @@ export class ElevenLabsMusicGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'music') throw new Error('ElevenLabs Music only supports music generation');
 
     const response = await fetch('https://api.elevenlabs.io/v1/music/generate', {

@@ -4,7 +4,10 @@ export class WebhookNotificationProvider implements NotificationProvider {
   readonly id = 'webhook-notify';
   readonly name = 'Webhook';
 
-  constructor(private url: string, private headers?: Record<string, string>) {}
+  constructor(
+    private url: string,
+    private headers?: Record<string, string>,
+  ) {}
 
   async send(message: string, urgent?: boolean): Promise<void> {
     const response = await fetch(this.url, {

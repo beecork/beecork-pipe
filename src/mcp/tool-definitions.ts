@@ -5,20 +5,30 @@
 export const TOOL_DEFINITIONS = [
   {
     name: 'beecork_remember',
-    description: 'Store a fact in Beecork\'s long-term memory. Use this for preferences, decisions, server addresses, outcomes, or anything the user might want recalled in future sessions.',
+    description:
+      "Store a fact in Beecork's long-term memory. Use this for preferences, decisions, server addresses, outcomes, or anything the user might want recalled in future sessions.",
     inputSchema: {
       type: 'object' as const,
       properties: {
         content: { type: 'string', description: 'The fact or information to remember' },
-        scope: { type: 'string', enum: ['global', 'project', 'tab', 'auto'], description: 'Where to store: global (about the user), project (about this folder), tab (about this conversation), or auto (Claude decides)' },
-        category: { type: 'string', description: 'For global scope: people, preferences, routines, or general' },
+        scope: {
+          type: 'string',
+          enum: ['global', 'project', 'tab', 'auto'],
+          description:
+            'Where to store: global (about the user), project (about this folder), tab (about this conversation), or auto (Claude decides)',
+        },
+        category: {
+          type: 'string',
+          description: 'For global scope: people, preferences, routines, or general',
+        },
       },
       required: ['content'],
     },
   },
   {
     name: 'beecork_task_create',
-    description: 'Schedule a task that will run automatically. The task sends a message to a Beecork tab at the scheduled time.',
+    description:
+      'Schedule a task that will run automatically. The task sends a message to a Beecork tab at the scheduled time.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -26,11 +36,18 @@ export const TOOL_DEFINITIONS = [
         scheduleType: {
           type: 'string',
           enum: ['at', 'every', 'cron'],
-          description: '"at" = one-time ISO datetime, "every" = interval like "30m"/"2h"/"1d", "cron" = cron expression like "0 9 * * 1"',
+          description:
+            '"at" = one-time ISO datetime, "every" = interval like "30m"/"2h"/"1d", "cron" = cron expression like "0 9 * * 1"',
         },
-        schedule: { type: 'string', description: 'The schedule value (ISO datetime, interval, or cron expression)' },
+        schedule: {
+          type: 'string',
+          description: 'The schedule value (ISO datetime, interval, or cron expression)',
+        },
         message: { type: 'string', description: 'The prompt/message to send when the task fires' },
-        tabName: { type: 'string', description: 'Which tab to send the message to (default: "default")' },
+        tabName: {
+          type: 'string',
+          description: 'Which tab to send the message to (default: "default")',
+        },
       },
       required: ['name', 'scheduleType', 'schedule', 'message'],
     },
@@ -51,7 +68,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_cron_create',
-    description: '[DEPRECATED — use beecork_task_create] Schedule a task that will run automatically.',
+    description:
+      '[DEPRECATED — use beecork_task_create] Schedule a task that will run automatically.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -80,17 +98,32 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_watch_create',
-    description: 'Create a watcher that periodically runs a check command and triggers an action when a condition is met.',
+    description:
+      'Create a watcher that periodically runs a check command and triggers an action when a condition is met.',
     inputSchema: {
       type: 'object' as const,
       properties: {
         name: { type: 'string', description: 'Human-readable name for the watcher' },
         description: { type: 'string', description: 'What to watch (natural language)' },
         checkCommand: { type: 'string', description: 'Shell command to run for checking' },
-        condition: { type: 'string', description: 'When to trigger: "contains X", "not contains X", "> N", "< N", "any", "error"' },
-        action: { type: 'string', enum: ['notify', 'fix', 'delegate'], description: 'What to do when triggered (default: notify)' },
-        actionDetails: { type: 'string', description: 'For fix: command to run. For delegate: tab name + message.' },
-        schedule: { type: 'string', description: 'How often to check: cron expression or interval like "5m", "1h"' },
+        condition: {
+          type: 'string',
+          description:
+            'When to trigger: "contains X", "not contains X", "> N", "< N", "any", "error"',
+        },
+        action: {
+          type: 'string',
+          enum: ['notify', 'fix', 'delegate'],
+          description: 'What to do when triggered (default: notify)',
+        },
+        actionDetails: {
+          type: 'string',
+          description: 'For fix: command to run. For delegate: tab name + message.',
+        },
+        schedule: {
+          type: 'string',
+          description: 'How often to check: cron expression or interval like "5m", "1h"',
+        },
       },
       required: ['name', 'checkCommand', 'condition', 'schedule'],
     },
@@ -111,13 +144,23 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_tab_create',
-    description: 'Create a new Beecork tab (an isolated Claude session with its own working directory and history).',
+    description:
+      'Create a new Beecork tab (an isolated Claude session with its own working directory and history).',
     inputSchema: {
       type: 'object' as const,
       properties: {
-        name: { type: 'string', description: 'Tab name (alphanumeric + hyphens, max 32 chars). Cannot be "default".' },
-        workingDir: { type: 'string', description: 'Absolute path or ~/path for the tab\'s working directory' },
-        template: { type: 'string', description: 'Name of a tab template from config (sets workingDir + systemPrompt)' },
+        name: {
+          type: 'string',
+          description: 'Tab name (alphanumeric + hyphens, max 32 chars). Cannot be "default".',
+        },
+        workingDir: {
+          type: 'string',
+          description: "Absolute path or ~/path for the tab's working directory",
+        },
+        template: {
+          type: 'string',
+          description: 'Name of a tab template from config (sets workingDir + systemPrompt)',
+        },
         systemPrompt: { type: 'string', description: 'Tab-specific system prompt for Claude' },
       },
       required: ['name'],
@@ -130,7 +173,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_send_message',
-    description: 'Send a message to another Beecork tab. The message will be processed asynchronously by that tab\'s Claude subprocess.',
+    description:
+      "Send a message to another Beecork tab. The message will be processed asynchronously by that tab's Claude subprocess.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -142,7 +186,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_recall',
-    description: 'Search Beecork\'s memory and knowledge files for facts matching a query.',
+    description: "Search Beecork's memory and knowledge files for facts matching a query.",
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -154,7 +198,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_notify',
-    description: 'Send a notification to the user via their configured channels (Telegram, Discord, etc.).',
+    description:
+      'Send a notification to the user via their configured channels (Telegram, Discord, etc.).',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -171,13 +216,17 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_send_media',
-    description: 'Send a generated or local media file (image/video/audio) through the user\'s channels.',
+    description:
+      "Send a generated or local media file (image/video/audio) through the user's channels.",
     inputSchema: {
       type: 'object' as const,
       properties: {
         filePath: { type: 'string', description: 'Absolute path to the media file' },
         caption: { type: 'string', description: 'Optional caption' },
-        tabName: { type: 'string', description: 'Tab to attribute the send to (default: "default")' },
+        tabName: {
+          type: 'string',
+          description: 'Tab to attribute the send to (default: "default")',
+        },
       },
       required: ['filePath'],
     },
@@ -214,7 +263,11 @@ export const TOOL_DEFINITIONS = [
     inputSchema: {
       type: 'object' as const,
       properties: {
-        type: { type: 'string', enum: ['costs', 'messages', 'crons'], description: 'What to export' },
+        type: {
+          type: 'string',
+          enum: ['costs', 'messages', 'crons'],
+          description: 'What to export',
+        },
         days: { type: 'number', description: 'Lookback window in days (default 30)' },
       },
       required: ['type'],
@@ -222,7 +275,7 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_handoff',
-    description: 'Get info to resume a tab\'s session in your terminal.',
+    description: "Get info to resume a tab's session in your terminal.",
     inputSchema: {
       type: 'object' as const,
       properties: { tabName: { type: 'string' } },
@@ -237,7 +290,10 @@ export const TOOL_DEFINITIONS = [
       properties: {
         tabName: { type: 'string', description: 'Tab to delegate to' },
         message: { type: 'string', description: 'The task description' },
-        returnToTab: { type: 'string', description: 'Tab to notify when complete (default: "default")' },
+        returnToTab: {
+          type: 'string',
+          description: 'Tab to notify when complete (default: "default")',
+        },
       },
       required: ['tabName', 'message'],
     },
@@ -257,7 +313,10 @@ export const TOOL_DEFINITIONS = [
       type: 'object' as const,
       properties: {
         name: { type: 'string', description: 'Project name (also the folder name)' },
-        path: { type: 'string', description: 'Optional parent directory (must be under a scan path)' },
+        path: {
+          type: 'string',
+          description: 'Optional parent directory (must be under a scan path)',
+        },
       },
       required: ['name'],
     },
@@ -321,7 +380,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_knowledge',
-    description: 'List all stored knowledge (memories + knowledge files), optionally filtered by scope.',
+    description:
+      'List all stored knowledge (memories + knowledge files), optionally filtered by scope.',
     inputSchema: {
       type: 'object' as const,
       properties: { scope: { type: 'string', enum: ['global', 'project', 'tab', 'all'] } },
@@ -355,7 +415,8 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'beecork_store_search',
-    description: 'Search the Beecork community extension registry (npm packages starting with "beecork-").',
+    description:
+      'Search the Beecork community extension registry (npm packages starting with "beecork-").',
     inputSchema: {
       type: 'object' as const,
       properties: { query: { type: 'string' } },

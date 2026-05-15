@@ -1,19 +1,28 @@
+/*
+ * Discord integration via discord.js (peer-optional, dynamic-imported).
+ *
+ * discord.js's strict union types (PartialGroupDMChannel, TextChannel, etc.)
+ * require narrowing at every send/sendTyping callsite. The runtime channel
+ * objects we receive in handlers all support these methods, but expressing
+ * that to TypeScript via the published types is a significant refactor with
+ * no runtime benefit. We accept `any` at this library boundary — same pattern
+ * as the WhatsApp/baileys integration.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { logger } from '../util/logger.js';
-import { chunkText, formatTabbedResponse, parseTabMessage } from '../util/text.js';
-import { retryWithBackoff } from '../util/retry.js';
+import { parseTabMessage } from '../util/text.js';
+import { sendChunkedResponse } from './send-helpers.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { VoiceState } from './voice-state.js';
 import { processInboundMessage } from './pipeline.js';
 import { isChannelAdmin } from './admin.js';
-import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import type { Channel, ChannelContext, MediaAttachment, SendOptions } from './types.js';
 
 export class DiscordChannel implements Channel {
   readonly id = 'discord';
   readonly name = 'Discord';
   readonly maxMessageLength = 2000;
-  readonly supportsStreaming = false; // Discord message editing is rate-limited
-  readonly supportsMedia = true;
 
   private client: any = null; // Discord.js Client
   private ctx: ChannelContext;
@@ -22,9 +31,7 @@ export class DiscordChannel implements Channel {
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
-    this.allowedUserIds = new Set(
-      (ctx.config.discord?.allowedUserIds ?? []).map(String)
-    );
+    this.allowedUserIds = new Set((ctx.config.discord?.allowedUserIds ?? []).map(String));
   }
 
   async start(): Promise<void> {
@@ -66,7 +73,9 @@ export class DiscordChannel implements Channel {
 
       // Rate limit
       if (!inboundLimiter.check(this.id)) {
-        await message.reply("I'm receiving too many messages right now. Please wait a moment.").catch(() => {});
+        await message
+          .reply("I'm receiving too many messages right now. Please wait a moment.")
+          .catch(() => {});
         return;
       }
 
@@ -120,12 +129,19 @@ export class DiscordChannel implements Channel {
         // Shared command handler
         if (text.startsWith('/')) {
           const { handleSharedCommand } = await import('./command-handler.js');
-          const cmdResult = await handleSharedCommand({
-            userId: message.author.id,
-            text,
-            isAdmin: isChannelAdmin(this.allowedUserIds, message.author.id, this.ctx.config.discord?.adminUserId),
-            channelId: 'discord',
-          }, this.ctx.tabManager);
+          const cmdResult = await handleSharedCommand(
+            {
+              userId: message.author.id,
+              text,
+              isAdmin: isChannelAdmin(
+                this.allowedUserIds,
+                message.author.id,
+                this.ctx.config.discord?.adminUserId,
+              ),
+              channelId: 'discord',
+            },
+            this.ctx.tabManager,
+          );
           if (cmdResult.handled) {
             if (cmdResult.response) await message.reply(cmdResult.response);
             return;
@@ -205,30 +221,23 @@ export class DiscordChannel implements Channel {
     logger.info('Discord bot stopped');
   }
 
-  onMessage(_handler: InboundMessageHandler): void {
-    // Messages are handled directly in start()
-  }
-
-  async sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void> {
+  async sendMessage(peerId: string, text: string, _options?: SendOptions): Promise<void> {
     if (!this.client) return;
     try {
       const channel = await this.client.channels.fetch(peerId);
       if (!channel?.isTextBased()) return;
-
-      const chunks = chunkText(text, this.maxMessageLength);
-      for (const chunk of chunks) {
-        await retryWithBackoff(
-          () => channel.send(chunk),
-          [1000, 5000, 15000],
-          'discord-send',
-        );
-      }
+      await sendChunkedResponse({
+        text,
+        maxLength: this.maxMessageLength,
+        retryLabel: 'discord-send',
+        sendChunk: (chunk) => channel.send(chunk),
+      });
     } catch (err) {
       logger.error(`Discord send failed for ${peerId}:`, err);
     }
   }
 
-  async sendNotification(message: string, urgent?: boolean): Promise<void> {
+  async sendNotification(message: string, _urgent?: boolean): Promise<void> {
     if (!this.client) return;
     // Send to all allowed users via DM
     for (const userId of this.allowedUserIds) {
@@ -255,18 +264,21 @@ export class DiscordChannel implements Channel {
 
   private async sendResponse(message: any, text: string, tabName?: string): Promise<void> {
     // Discord quirk: first chunk uses message.reply so it threads under the
-    // original user message; follow-ups use channel.send. The shared helper
-    // takes a sendChunk callback so each channel keeps its platform-specific
-    // dispatch while sharing chunk + prefix + retry logic.
-    const full = formatTabbedResponse(text, tabName);
-    const chunks = chunkText(full, this.maxMessageLength);
-    for (let i = 0; i < chunks.length; i++) {
-      const isFirst = i === 0;
-      await retryWithBackoff(
-        () => isFirst ? message.reply(chunks[i]) : message.channel.send(chunks[i]),
-        [1000, 5000],
-        isFirst ? 'discord-reply' : 'discord-send',
-      );
-    }
+    // original user message; follow-ups use channel.send. sendChunkedResponse
+    // handles prefix + chunking + retry envelope; the closure-tracked chunkIdx
+    // keeps the "first chunk replies, rest send" behavior.
+    let chunkIdx = 0;
+    await sendChunkedResponse({
+      text,
+      tabName,
+      maxLength: this.maxMessageLength,
+      retryDelays: [1000, 5000],
+      retryLabel: 'discord-send',
+      sendChunk: (chunk) => {
+        const isFirst = chunkIdx === 0;
+        chunkIdx++;
+        return isFirst ? message.reply(chunk) : message.channel.send(chunk);
+      },
+    });
   }
 }

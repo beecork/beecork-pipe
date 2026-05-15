@@ -14,14 +14,18 @@ export class RunwayGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'video') throw new Error('Runway only supports video generation');
 
     // Start generation
     const startResponse = await fetch('https://api.runwayml.com/v1/image_to_video', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
         'X-Runway-Version': '2024-11-06',
       },
@@ -38,15 +42,15 @@ export class RunwayGenerator implements MediaGenerator {
       throw new Error(`Runway error ${startResponse.status}: ${err.slice(0, 200)}`);
     }
 
-    const { id: taskId } = await startResponse.json() as { id: string };
+    const { id: taskId } = (await startResponse.json()) as { id: string };
 
     // Poll for completion (max 5 minutes)
-    const headers = { 'Authorization': `Bearer ${this.apiKey}`, 'X-Runway-Version': '2024-11-06' };
+    const headers = { Authorization: `Bearer ${this.apiKey}`, 'X-Runway-Version': '2024-11-06' };
     const videoUrl = await pollForCompletion<RunwayStatusResponse>({
       statusUrl: `https://api.runwayml.com/v1/tasks/${taskId}`,
       headers,
       isComplete: (data) => data.status === 'SUCCEEDED' && !!data.output?.[0],
-      isFailed: (data) => data.status === 'FAILED' ? 'generation failed' : null,
+      isFailed: (data) => (data.status === 'FAILED' ? 'generation failed' : null),
       getResultUrl: (data) => data.output![0],
       label: 'Runway',
     });

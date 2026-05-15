@@ -3,29 +3,12 @@ import type { BeecorkConfig, MediaAttachment } from '../types.js';
 
 export type { MediaAttachment };
 
-/** An inbound message from any channel */
-export interface InboundMessage {
-  channelId: string;
-  peerId: string;
-  text?: string;
-  media?: MediaAttachment[];
-  replyTo?: string;
-  isGroup: boolean;
-  groupId?: string;
-  isMentioned?: boolean;
-  isReply?: boolean;
-  messageId: string;
-  raw: unknown;
-}
-
-/** Options for sending a message */
-export interface SendOptions {
-  parseMode?: 'markdown' | 'plain';
-  replyToMessageId?: string;
-}
-
-/** Handler for inbound messages */
-export type InboundMessageHandler = (message: InboundMessage) => Promise<void>;
+/**
+ * Options for sending a message. Currently empty — channels do not honor
+ * markdown/reply-threading hints. Kept as a placeholder so future per-channel
+ * options can be added without touching every call site.
+ */
+export type SendOptions = Record<string, never>;
 
 /** The Channel interface — all channels must implement this */
 export interface Channel {
@@ -35,10 +18,6 @@ export interface Channel {
   readonly name: string;
   /** Maximum message length in characters */
   readonly maxMessageLength: number;
-  /** Whether this channel supports live streaming of responses */
-  readonly supportsStreaming: boolean;
-  /** Whether this channel supports media attachments */
-  readonly supportsMedia: boolean;
 
   /** Start the channel (connect, start polling, etc.) */
   start(): Promise<void>;
@@ -46,14 +25,16 @@ export interface Channel {
   stop(): void;
   /** Send a text message to a specific peer */
   sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void>;
-  /** Send a media attachment to a peer (optional — check supportsMedia) */
+  /** Send a media attachment to a peer (optional — channels implement when supported) */
   sendMedia?(peerId: string, media: MediaAttachment): Promise<void>;
   /** Send a notification to all configured recipients */
   sendNotification(message: string, urgent?: boolean): Promise<void>;
   /** Set typing indicator for a peer */
   setTyping(peerId: string, active: boolean): Promise<void>;
-  /** Register the inbound message handler — called by the registry */
-  onMessage(handler: InboundMessageHandler): void;
+  /** Broadcast a media file to every configured recipient — used by the
+   * pending-message dispatcher to deliver MCP-queued media. Optional; channels
+   * that don't implement it fall back to sendNotification with a text summary. */
+  broadcastMedia?(media: MediaAttachment): Promise<void>;
 }
 
 /** Context passed to channels during construction */

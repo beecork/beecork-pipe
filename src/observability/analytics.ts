@@ -21,18 +21,40 @@ export interface ActivitySummary {
 export function getCostSummary(): CostSummary {
   const db = getDb();
 
-  const today = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')").get() as { total: number }).total;
-  const last7 = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-7 days')").get() as { total: number }).total;
-  const last30 = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-30 days')").get() as { total: number }).total;
+  const today = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')",
+      )
+      .get() as { total: number }
+  ).total;
+  const last7 = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-7 days')",
+      )
+      .get() as { total: number }
+  ).total;
+  const last30 = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now', '-30 days')",
+      )
+      .get() as { total: number }
+  ).total;
 
   // Per-tab summed over the last 30 days only — the unbounded version grew
   // linearly with the messages table and made /cost noticeably slow over time.
-  const perTab = db.prepare(`
+  const perTab = db
+    .prepare(
+      `
     SELECT t.name, COALESCE(SUM(m.cost_usd), 0) as cost, COUNT(m.id) as messages
     FROM tabs t LEFT JOIN messages m ON m.tab_id = t.id
       AND m.created_at > date('now', '-30 days')
     GROUP BY t.id ORDER BY cost DESC
-  `).all() as Array<{ name: string; cost: number; messages: number }>;
+  `,
+    )
+    .all() as Array<{ name: string; cost: number; messages: number }>;
 
   return { today, last7Days: last7, last30Days: last30, perTab };
 }
@@ -41,12 +63,36 @@ export function getActivitySummary(hours: number = 24): ActivitySummary {
   const db = getDb();
   const sinceDate = new Date(Date.now() - hours * 3600000).toISOString();
 
-  const messagesReceived = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('user', sinceDate) as { c: number }).c;
-  const messagesFromAssistant = (db.prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?').get('assistant', sinceDate) as { c: number }).c;
-  const tasksFired = (db.prepare('SELECT COUNT(*) as c FROM tasks WHERE last_run_at > ?').get(sinceDate) as { c: number }).c;
-  const memoriesCreated = (db.prepare('SELECT COUNT(*) as c FROM memories WHERE created_at > ?').get(sinceDate) as { c: number }).c;
-  const totalCost = (db.prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > ?').get(sinceDate) as { total: number }).total;
-  const activeTabsCount = (db.prepare('SELECT COUNT(DISTINCT tab_id) as c FROM messages WHERE created_at > ?').get(sinceDate) as { c: number }).c;
+  const messagesReceived = (
+    db
+      .prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?')
+      .get('user', sinceDate) as { c: number }
+  ).c;
+  const messagesFromAssistant = (
+    db
+      .prepare('SELECT COUNT(*) as c FROM messages WHERE role = ? AND created_at > ?')
+      .get('assistant', sinceDate) as { c: number }
+  ).c;
+  const tasksFired = (
+    db.prepare('SELECT COUNT(*) as c FROM tasks WHERE last_run_at > ?').get(sinceDate) as {
+      c: number;
+    }
+  ).c;
+  const memoriesCreated = (
+    db.prepare('SELECT COUNT(*) as c FROM memories WHERE created_at > ?').get(sinceDate) as {
+      c: number;
+    }
+  ).c;
+  const totalCost = (
+    db
+      .prepare('SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > ?')
+      .get(sinceDate) as { total: number }
+  ).total;
+  const activeTabsCount = (
+    db
+      .prepare('SELECT COUNT(DISTINCT tab_id) as c FROM messages WHERE created_at > ?')
+      .get(sinceDate) as { c: number }
+  ).c;
 
   return {
     period: `Last ${hours} hours`,
@@ -67,29 +113,43 @@ const ANOMALY_STATE_KEY = 'anomaly_spend_state';
  */
 export function checkAnomaliesWithDb(db: Database.Database): string | null {
   // Today's spend
-  const todaySpend = (db.prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')").get() as { total: number }).total;
+  const todaySpend = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(cost_usd), 0) as total FROM messages WHERE created_at > date('now')",
+      )
+      .get() as { total: number }
+  ).total;
 
   // 7-day rolling average (excluding today)
-  const avgSpend = (db.prepare(`
+  const avgSpend = (
+    db
+      .prepare(
+        `
     SELECT COALESCE(AVG(daily_total), 0) as avg FROM (
       SELECT date(created_at) as day, SUM(cost_usd) as daily_total
       FROM messages
       WHERE created_at > date('now', '-7 days') AND created_at < date('now')
       GROUP BY date(created_at)
     )
-  `).get() as { avg: number }).avg;
+  `,
+      )
+      .get() as { avg: number }
+  ).avg;
 
   const isBreach = avgSpend > 0 && todaySpend > avgSpend * 2;
   const newState = isBreach ? 'breach' : 'ok';
 
-  const prevRow = db.prepare('SELECT value FROM preferences WHERE key = ?').get(ANOMALY_STATE_KEY) as { value: string } | undefined;
+  const prevRow = db
+    .prepare('SELECT value FROM preferences WHERE key = ?')
+    .get(ANOMALY_STATE_KEY) as { value: string } | undefined;
   const prevState = prevRow?.value ?? 'ok';
 
   if (newState === prevState) return null;
 
   db.prepare(
     `INSERT INTO preferences (key, value, updated_at) VALUES (?, ?, datetime('now'))
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')`,
   ).run(ANOMALY_STATE_KEY, newState);
 
   if (isBreach) {
@@ -133,4 +193,3 @@ export function formatActivitySummary(summary: ActivitySummary): string {
     `  Cost: $${summary.totalCost.toFixed(4)}`,
   ].join('\n');
 }
-

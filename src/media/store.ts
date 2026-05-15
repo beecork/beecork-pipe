@@ -20,9 +20,7 @@ export function saveMedia(buffer: Buffer, extension: string, originalName?: stri
   const safeName = originalName
     ? originalName.replace(/[\/\\]/g, '_').replace(/\.\./g, '_')
     : undefined;
-  const name = safeName
-    ? `${timestamp}-${safeName}`
-    : `${timestamp}.${extension}`;
+  const name = safeName ? `${timestamp}-${safeName}` : `${timestamp}.${extension}`;
   const filePath = path.join(MEDIA_DIR, name);
   fs.writeFileSync(filePath, buffer);
   return filePath;
@@ -46,7 +44,9 @@ export function cleanupMedia(ttlMs: number = DEFAULT_TTL_MS): number {
         fs.unlinkSync(filePath);
         cleaned++;
       }
-    } catch { /* file may have been deleted by another process */ }
+    } catch {
+      /* file may have been deleted by another process */
+    }
   }
   if (cleaned > 0) logger.info(`Media cleanup: removed ${cleaned} expired files`);
   return cleaned;
@@ -55,4 +55,19 @@ export function cleanupMedia(ttlMs: number = DEFAULT_TTL_MS): number {
 /** Get the media directory path */
 export function getMediaDir(): string {
   return MEDIA_DIR;
+}
+
+/**
+ * Resolve a file path and confirm it lives inside the beecork media directory.
+ * Throws otherwise. Used at trust boundaries (MCP tools, voice transcription)
+ * where a caller could otherwise hand us an arbitrary path to read or upload.
+ * Returns the resolved (absolute) path on success.
+ */
+export function assertInsideMediaDir(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(MEDIA_DIR) + path.sep;
+  if (!resolved.startsWith(root)) {
+    throw new Error(`filePath must be inside the beecork media directory (${MEDIA_DIR})`);
+  }
+  return resolved;
 }

@@ -8,7 +8,11 @@ export class StableDiffusionGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'image') throw new Error('Stable Diffusion only supports image generation');
 
     const formData = new FormData();
@@ -19,8 +23,8 @@ export class StableDiffusionGenerator implements MediaGenerator {
     const response = await fetch('https://api.stability.ai/v2beta/stable-image/generate/core', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Accept': 'image/*',
+        Authorization: `Bearer ${this.apiKey}`,
+        Accept: 'image/*',
       },
       body: formData,
       signal: AbortSignal.timeout(120000),

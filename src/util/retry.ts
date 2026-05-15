@@ -14,8 +14,10 @@ export async function retryWithBackoff<T>(
     } catch (err) {
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < delays.length) {
-        logger.warn(`${label} failed (attempt ${attempt + 1}/${delays.length + 1}), retrying in ${delays[attempt]}ms: ${lastError.message}`);
-        await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+        logger.warn(
+          `${label} failed (attempt ${attempt + 1}/${delays.length + 1}), retrying in ${delays[attempt]}ms: ${lastError.message}`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
       }
     }
   }

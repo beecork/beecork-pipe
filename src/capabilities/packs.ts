@@ -11,7 +11,10 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
       package: '@notionhq/notion-mcp-server',
       command: 'npx',
       args: ['-y', '@notionhq/notion-mcp-server'],
-      env: { OPENAPI_MCP_HEADERS: '{"Authorization":"Bearer ${NOTION_API_KEY}","Notion-Version":"2022-06-28"}' },
+      env: {
+        OPENAPI_MCP_HEADERS:
+          '{"Authorization":"Bearer ${NOTION_API_KEY}","Notion-Version":"2022-06-28"}',
+      },
     },
     requiresApiKey: true,
     apiKeyHint: 'Notion integration token (from notion.so/my-integrations)',

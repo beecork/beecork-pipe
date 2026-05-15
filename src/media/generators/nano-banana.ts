@@ -1,14 +1,27 @@
 import { saveMedia } from '../store.js';
-import type { MediaGenerator, MediaType, GenerateOptions, GenerateResult } from '../types.js';
+import type {
+  MediaGenerator,
+  MediaType,
+  GenerateOptions,
+  GenerateResult,
+  GeminiGenerateContentResponse,
+} from '../types.js';
 
 export class NanoBananaGenerator implements MediaGenerator {
   readonly id = 'nano-banana';
   readonly name = 'Google Nano Banana';
   readonly supportedTypes: MediaType[] = ['image'];
 
-  constructor(private apiKey: string, private model: string = 'gemini-2.5-flash-image') {}
+  constructor(
+    private apiKey: string,
+    private model: string = 'gemini-2.5-flash-image',
+  ) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    _options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'image') throw new Error('Nano Banana only supports image generation');
 
     // Gemini image generation API
@@ -27,7 +40,7 @@ export class NanoBananaGenerator implements MediaGenerator {
           },
         }),
         signal: AbortSignal.timeout(120000),
-      }
+      },
     );
 
     if (!response.ok) {
@@ -35,8 +48,8 @@ export class NanoBananaGenerator implements MediaGenerator {
       throw new Error(`Nano Banana error ${response.status}: ${err.slice(0, 200)}`);
     }
 
-    const data = await response.json() as any;
-    const imagePart = data.candidates?.[0]?.content?.parts?.find((p: any) => p.inlineData);
+    const data = (await response.json()) as GeminiGenerateContentResponse;
+    const imagePart = data.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
     if (!imagePart?.inlineData?.data) {
       throw new Error('Nano Banana returned no image data');
     }

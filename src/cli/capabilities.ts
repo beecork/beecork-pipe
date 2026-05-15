@@ -2,17 +2,17 @@ import readline from 'node:readline';
 
 function ask(rl: readline.Interface, question: string, defaultValue?: string): Promise<string> {
   const prompt = defaultValue ? `${question} [${defaultValue}]: ` : `${question}: `;
-  return new Promise(r => rl.question(prompt, a => r(a.trim() || defaultValue || '')));
+  return new Promise((r) => rl.question(prompt, (a) => r(a.trim() || defaultValue || '')));
 }
 
 export async function enableCapability(packId: string): Promise<void> {
   const { getAvailablePacks, isEnabled, enablePack } = await import('../capabilities/index.js');
   const packs = getAvailablePacks();
-  const pack = packs.find(p => p.id === packId);
+  const pack = packs.find((p) => p.id === packId);
 
   if (!pack) {
     console.log(`Unknown capability: "${packId}"`);
-    console.log('Available: ' + packs.map(p => p.id).join(', '));
+    console.log('Available: ' + packs.map((p) => p.id).join(', '));
     return;
   }
 
@@ -57,7 +57,7 @@ export async function listCapabilities(): Promise<void> {
   };
 
   for (const category of categories) {
-    const categoryPacks = packs.filter(p => p.category === category);
+    const categoryPacks = packs.filter((p) => p.category === category);
     if (categoryPacks.length === 0) continue;
 
     console.log(`  ${categoryNames[category]}:`);

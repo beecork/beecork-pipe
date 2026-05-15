@@ -18,13 +18,17 @@ export class KlingGenerator implements MediaGenerator {
 
   constructor(private apiKey: string) {}
 
-  async generate(type: MediaType, prompt: string, options?: GenerateOptions): Promise<GenerateResult> {
+  async generate(
+    type: MediaType,
+    prompt: string,
+    options?: GenerateOptions,
+  ): Promise<GenerateResult> {
     if (type !== 'video') throw new Error('Kling only supports video generation');
 
     const response = await fetch('https://api.klingai.com/v1/videos/text2video', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -40,15 +44,15 @@ export class KlingGenerator implements MediaGenerator {
       throw new Error(`Kling error ${response.status}: ${err.slice(0, 200)}`);
     }
 
-    const { data } = await response.json() as { data: { task_id: string } };
+    const { data } = (await response.json()) as { data: { task_id: string } };
 
     // Poll for completion
-    const headers = { 'Authorization': `Bearer ${this.apiKey}` };
+    const headers = { Authorization: `Bearer ${this.apiKey}` };
     const videoUrl = await pollForCompletion<KlingStatusResponse>({
       statusUrl: `https://api.klingai.com/v1/videos/text2video/${data.task_id}`,
       headers,
       isComplete: (d) => d.data.task_status === 'succeed' && !!d.data.task_result?.videos[0],
-      isFailed: (d) => d.data.task_status === 'failed' ? 'generation failed' : null,
+      isFailed: (d) => (d.data.task_status === 'failed' ? 'generation failed' : null),
       getResultUrl: (d) => d.data.task_result!.videos[0].url,
       label: 'Kling',
     });

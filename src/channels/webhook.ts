@@ -6,7 +6,7 @@ import { inboundLimiter } from '../util/rate-limiter.js';
 import { MESSAGE_LIMITS } from '../util/text.js';
 import { processInboundMessage } from './pipeline.js';
 import type { WebhookConfig } from '../types.js';
-import type { Channel, ChannelContext, InboundMessageHandler, SendOptions } from './types.js';
+import type { Channel, ChannelContext, SendOptions } from './types.js';
 
 function safeEqualString(a: string, b: string): boolean {
   const ab = Buffer.from(a);
@@ -23,8 +23,6 @@ export class WebhookChannel implements Channel {
   readonly id = 'webhook';
   readonly name = 'Webhook';
   readonly maxMessageLength = MESSAGE_LIMITS.WEBHOOK_PROMPT;
-  readonly supportsStreaming = false;
-  readonly supportsMedia = false;
 
   private server: http.Server | null = null;
   private ctx: ChannelContext;
@@ -36,6 +34,19 @@ export class WebhookChannel implements Channel {
   async start(): Promise<void> {
     const config = this.getConfig();
     if (!config?.enabled) return;
+
+    // Fail-secure: a webhook running with no auth turns localhost-injected
+    // prompts (from any local process or any user on a shared host) into
+    // arbitrary claude --dangerously-skip-permissions runs. Require either
+    // an authToken or hmacSecret, OR an explicit allowUnauthLocalhost opt-in.
+    if (!config.authToken && !config.hmacSecret && !config.allowUnauthLocalhost) {
+      logger.error(
+        'Webhook channel refusing to start: no authToken or hmacSecret configured. ' +
+          'Set one in ~/.beecork/config.json under webhook.authToken/hmacSecret, or ' +
+          'explicitly opt in with webhook.allowUnauthLocalhost=true (NOT recommended on shared hosts).',
+      );
+      return;
+    }
 
     const port = config.port || 8374;
 
@@ -128,15 +139,19 @@ export class WebhookChannel implements Channel {
             channelId: this.id,
             tabManager: this.ctx.tabManager,
             userId: remote,
-            sendProgress: () => { /* webhook has no progress channel */ },
+            sendProgress: () => {
+              /* webhook has no progress channel */
+            },
             overrideTabName: tabName,
           });
           res.writeHead(result.isError ? 500 : 200);
-          res.end(JSON.stringify({
-            text: result.responseText,
-            tab: result.tabName,
-            error: result.isError ? result.responseText : undefined,
-          }));
+          res.end(
+            JSON.stringify({
+              text: result.responseText,
+              tab: result.tabName,
+              error: result.isError ? result.responseText : undefined,
+            }),
+          );
         } else {
           // Async mode: fire-and-forget through the pipeline.
           // Surface failures to the user via broadcastNotify since the HTTP response
@@ -147,18 +162,28 @@ export class WebhookChannel implements Channel {
             channelId: this.id,
             tabManager: this.ctx.tabManager,
             userId: remote,
-            sendProgress: () => { /* webhook has no progress channel */ },
+            sendProgress: () => {
+              /* webhook has no progress channel */
+            },
             overrideTabName: tabName,
-          }).then(result => {
-            if (result.isError && this.ctx.notifyCallback) {
-              this.ctx.notifyCallback(`Webhook async failed for "${tabName}": ${result.responseText}`).catch(() => {});
-            }
-          }).catch(err => {
-            logger.error(`Webhook async processing failed for tab ${tabName}:`, err);
-            if (this.ctx.notifyCallback) {
-              this.ctx.notifyCallback(`Webhook async failed for "${tabName}": ${err instanceof Error ? err.message : String(err)}`).catch(() => {});
-            }
-          });
+          })
+            .then((result) => {
+              if (result.isError && this.ctx.notifyCallback) {
+                this.ctx
+                  .notifyCallback(`Webhook async failed for "${tabName}": ${result.responseText}`)
+                  .catch(() => {});
+              }
+            })
+            .catch((err) => {
+              logger.error(`Webhook async processing failed for tab ${tabName}:`, err);
+              if (this.ctx.notifyCallback) {
+                this.ctx
+                  .notifyCallback(
+                    `Webhook async failed for "${tabName}": ${err instanceof Error ? err.message : String(err)}`,
+                  )
+                  .catch(() => {});
+              }
+            });
           res.writeHead(202);
           res.end(JSON.stringify({ accepted: true, tab: tabName }));
         }
@@ -180,10 +205,6 @@ export class WebhookChannel implements Channel {
       this.server = null;
     }
     logger.info('Webhook channel stopped');
-  }
-
-  onMessage(_handler: InboundMessageHandler): void {
-    // Webhooks handle messages directly in the HTTP handler
   }
 
   async sendMessage(_peerId: string, _text: string, _options?: SendOptions): Promise<void> {
@@ -212,7 +233,8 @@ export class WebhookChannel implements Channel {
     if (config.hmacSecret) {
       const signature = req.headers['x-hub-signature-256'] as string;
       if (signature) {
-        const expected = 'sha256=' + crypto.createHmac('sha256', config.hmacSecret).update(body).digest('hex');
+        const expected =
+          'sha256=' + crypto.createHmac('sha256', config.hmacSecret).update(body).digest('hex');
         try {
           return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
         } catch {

@@ -75,3 +75,15 @@ No LLM is involved in routing. No Anthropic API key is required. Claude Code its
 - Config file (`~/.beecork/config.json`) is chmod 600 after write (contains Telegram/Discord tokens)
 - MCP server uses a cached singleton DB connection — not per-call
 - Every channel calls `processInboundMessage()` from `src/channels/pipeline.ts` — no channel-specific routing code
+
+## Subprocess environment
+
+`ClaudeSubprocess` spawns `claude` with `env: { ...process.env }` — the subprocess inherits the daemon's **entire** environment. That includes anything in your shell profile: `OPENAI_API_KEY`, `GITHUB_TOKEN`, `AWS_ACCESS_KEY_ID`, `SSH_AUTH_SOCK`, etc.
+
+Combined with `--dangerously-skip-permissions`, this means any prompt-injected Claude run inside Beecork can read those values (e.g. `bash -c 'printenv'`) and use them to call other services on your behalf. The 2026-05-15 audit fix tightened the most direct exfiltration path (`beecork_send_media` now refuses to upload files outside `~/.beecork/media/`), but the broader rule still applies: **treat any env var the daemon can see as also visible to every Claude subprocess.**
+
+If you want to scrub specific keys, do it in the shell that launches the daemon, not at Claude-spawn time — there's no `envAllowlist` setting today.
+
+## Log level
+
+`BEECORK_LOG_LEVEL=debug beecork start` surfaces every `logger.debug` line (subprocess stdout/stderr, MCP non-JSON, etc.). Default is `info`. Useful when debugging "claude exits with no message" — at default level, `claude` stderr is logged at `warn` and reaches `daemon.log`, but `debug` adds the raw stdout parse failures.

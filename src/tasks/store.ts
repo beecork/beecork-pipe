@@ -6,31 +6,53 @@ import type { Task } from '../types.js';
 
 // SQLite row uses snake_case
 interface TaskRow {
-  id: string; name: string; schedule_type: string; schedule: string;
-  tab_name: string; message: string; enabled: number;
+  id: string;
+  name: string;
+  schedule_type: string;
+  schedule: string;
+  tab_name: string;
+  message: string;
+  enabled: number;
   payload_type?: string;
-  created_at: string; last_run_at: string | null; next_run_at: string | null;
+  created_at: string;
+  last_run_at: string | null;
+  next_run_at: string | null;
 }
 
 function rowToTask(row: TaskRow): Task {
   return {
-    id: row.id, name: row.name,
+    id: row.id,
+    name: row.name,
     scheduleType: row.schedule_type as Task['scheduleType'],
-    schedule: row.schedule, tabName: row.tab_name, message: row.message,
+    schedule: row.schedule,
+    tabName: row.tab_name,
+    message: row.message,
     payloadType: (row.payload_type as Task['payloadType']) || 'agentTurn',
-    enabled: row.enabled === 1, createdAt: row.created_at,
-    lastRunAt: row.last_run_at, nextRunAt: row.next_run_at,
+    enabled: row.enabled === 1,
+    createdAt: row.created_at,
+    lastRunAt: row.last_run_at,
+    nextRunAt: row.next_run_at,
   };
 }
 
+// One-shot JSON migration only needs to run once per process lifetime, but the
+// dashboard creates a fresh TaskStore per request and MCP creates one per task
+// call. Without this flag, every instantiation re-fired existsSync + COUNT(*).
+let migrationChecked = false;
+
 export class TaskStore {
   constructor() {
-    this.migrateFromJson();
+    if (!migrationChecked) {
+      migrationChecked = true;
+      this.migrateFromJson();
+    }
   }
 
   list(): Task[] {
     const db = getDb();
-    return (db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[]).map(rowToTask);
+    return (db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[]).map(
+      rowToTask,
+    );
   }
 
   get(id: string): Task | undefined {
@@ -41,10 +63,21 @@ export class TaskStore {
 
   add(job: Task): void {
     const db = getDb();
-    db.prepare(`INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, created_at, last_run_at, next_run_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      job.id, job.name, job.scheduleType, job.schedule, job.tabName, job.message,
-      job.payloadType || 'agentTurn', job.enabled ? 1 : 0, job.createdAt, job.lastRunAt, job.nextRunAt,
+    db.prepare(
+      `INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, created_at, last_run_at, next_run_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      job.id,
+      job.name,
+      job.scheduleType,
+      job.schedule,
+      job.tabName,
+      job.message,
+      job.payloadType || 'agentTurn',
+      job.enabled ? 1 : 0,
+      job.createdAt,
+      job.lastRunAt,
+      job.nextRunAt,
     );
   }
 
@@ -62,9 +95,18 @@ export class TaskStore {
     const merged = { ...existing, ...updates };
     if (scheduleChanged && updates.nextRunAt === undefined) merged.nextRunAt = null;
 
-    db.prepare(`UPDATE tasks SET name=?, schedule_type=?, schedule=?, tab_name=?, message=?, enabled=?, last_run_at=?, next_run_at=? WHERE id=?`).run(
-      merged.name, merged.scheduleType, merged.schedule, merged.tabName, merged.message,
-      merged.enabled ? 1 : 0, merged.lastRunAt, merged.nextRunAt, id,
+    db.prepare(
+      `UPDATE tasks SET name=?, schedule_type=?, schedule=?, tab_name=?, message=?, enabled=?, last_run_at=?, next_run_at=? WHERE id=?`,
+    ).run(
+      merged.name,
+      merged.scheduleType,
+      merged.schedule,
+      merged.tabName,
+      merged.message,
+      merged.enabled ? 1 : 0,
+      merged.lastRunAt,
+      merged.nextRunAt,
+      id,
     );
     return true;
   }
@@ -84,7 +126,11 @@ export class TaskStore {
     const count = db.prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number };
     if (count.count > 0) {
       // Already migrated, clean up JSON
-      try { fs.renameSync(jsonPath, jsonPath + '.bak'); } catch { /* ok */ }
+      try {
+        fs.renameSync(jsonPath, jsonPath + '.bak');
+      } catch {
+        /* ok */
+      }
       return;
     }
 
@@ -93,13 +139,24 @@ export class TaskStore {
       const jobs = data.jobs || [];
       if (jobs.length === 0) return;
 
-      const insert = db.prepare(`INSERT OR IGNORE INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled, created_at, last_run_at, next_run_at)
+      const insert =
+        db.prepare(`INSERT OR IGNORE INTO tasks (id, name, schedule_type, schedule, tab_name, message, enabled, created_at, last_run_at, next_run_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
       const tx = db.transaction(() => {
         for (const j of jobs) {
-          insert.run(j.id, j.name, j.scheduleType, j.schedule, j.tabName || 'default', j.message,
-            j.enabled ? 1 : 0, j.createdAt, j.lastRunAt, j.nextRunAt);
+          insert.run(
+            j.id,
+            j.name,
+            j.scheduleType,
+            j.schedule,
+            j.tabName || 'default',
+            j.message,
+            j.enabled ? 1 : 0,
+            j.createdAt,
+            j.lastRunAt,
+            j.nextRunAt,
+          );
         }
       });
       tx();

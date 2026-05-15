@@ -1,19 +1,26 @@
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
 const CHANNEL_PREFIX = 'beecork-channel-';
+const SAFE_NPM_PACKAGE = /^[@a-zA-Z0-9_/.-]+$/;
 
 export function channelInstall(packageName: string): void {
   // Normalize name
-  const fullName = packageName.startsWith(CHANNEL_PREFIX) ? packageName : `${CHANNEL_PREFIX}${packageName}`;
+  const fullName = packageName.startsWith(CHANNEL_PREFIX)
+    ? packageName
+    : `${CHANNEL_PREFIX}${packageName}`;
+  if (!SAFE_NPM_PACKAGE.test(fullName)) {
+    console.error(`Invalid package name: ${fullName}`);
+    process.exit(1);
+  }
 
   console.log(`Installing channel: ${fullName}...`);
   try {
-    execSync(`npm install -g ${fullName}`, { stdio: 'inherit' });
+    execFileSync('npm', ['install', '-g', fullName], { stdio: 'inherit' });
     console.log(`\nChannel "${fullName}" installed.`);
     console.log('Restart the daemon to activate: beecork stop && beecork start');
-  } catch (err) {
+  } catch {
     console.error(`Failed to install ${fullName}. Check the package name and try again.`);
     process.exit(1);
   }
@@ -32,44 +39,60 @@ export function channelCreate(name: string): void {
   fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
 
   // package.json
-  fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
-    name: pkgName,
-    version: '0.1.0',
-    description: `Beecork channel: ${name}`,
-    main: 'dist/index.js',
-    type: 'module',
-    scripts: {
-      build: 'tsc',
-      dev: 'tsc --watch',
-    },
-    keywords: ['beecork', 'beecork-channel', name],
-    peerDependencies: {
-      beecork: '>=0.4.0',
-    },
-    devDependencies: {
-      typescript: '^5.7.0',
-      '@types/node': '^22.0.0',
-    },
-  }, null, 2) + '\n');
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    JSON.stringify(
+      {
+        name: pkgName,
+        version: '0.1.0',
+        description: `Beecork channel: ${name}`,
+        main: 'dist/index.js',
+        type: 'module',
+        scripts: {
+          build: 'tsc',
+          dev: 'tsc --watch',
+        },
+        keywords: ['beecork', 'beecork-channel', name],
+        peerDependencies: {
+          beecork: '>=0.4.0',
+        },
+        devDependencies: {
+          typescript: '^5.7.0',
+          '@types/node': '^22.0.0',
+        },
+      },
+      null,
+      2,
+    ) + '\n',
+  );
 
   // tsconfig.json
-  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
-    compilerOptions: {
-      target: 'ES2022',
-      module: 'NodeNext',
-      moduleResolution: 'NodeNext',
-      outDir: 'dist',
-      rootDir: 'src',
-      strict: true,
-      esModuleInterop: true,
-      declaration: true,
-    },
-    include: ['src'],
-  }, null, 2) + '\n');
+  fs.writeFileSync(
+    path.join(dir, 'tsconfig.json'),
+    JSON.stringify(
+      {
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'NodeNext',
+          moduleResolution: 'NodeNext',
+          outDir: 'dist',
+          rootDir: 'src',
+          strict: true,
+          esModuleInterop: true,
+          declaration: true,
+        },
+        include: ['src'],
+      },
+      null,
+      2,
+    ) + '\n',
+  );
 
   // Main source file
   const className = name.charAt(0).toUpperCase() + name.slice(1);
-  fs.writeFileSync(path.join(dir, 'src', 'index.ts'), `// ${pkgName} — Beecork channel implementation
+  fs.writeFileSync(
+    path.join(dir, 'src', 'index.ts'),
+    `// ${pkgName} — Beecork channel implementation
 // See: https://github.com/beecork/beecork for Channel interface docs
 
 // Import the Channel interface type from beecork
@@ -133,10 +156,13 @@ export default class ${className}Channel implements Channel {
     // TODO: Show typing indicator
   }
 }
-`);
+`,
+  );
 
   // README
-  fs.writeFileSync(path.join(dir, 'README.md'), `# ${pkgName}
+  fs.writeFileSync(
+    path.join(dir, 'README.md'),
+    `# ${pkgName}
 
 A Beecork channel plugin for ${name}.
 
@@ -171,7 +197,8 @@ npm run build
 \`\`\`bash
 npm publish
 \`\`\`
-`);
+`,
+  );
 
   console.log(`\nChannel scaffold created: ${dir}/`);
   console.log(`\nNext steps:`);
@@ -184,8 +211,11 @@ npm publish
 
 export function channelList(): void {
   try {
-    const output = execSync('npm list -g --depth=0', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
-    const lines = output.split('\n').filter(line => line.includes(CHANNEL_PREFIX));
+    const output = execFileSync('npm', ['list', '-g', '--depth=0'], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    const lines = output.split('\n').filter((line) => line.includes(CHANNEL_PREFIX));
     if (lines.length === 0) {
       console.log('No community channels installed.');
       console.log(`Install one: beecork channel install <name>`);

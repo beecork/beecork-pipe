@@ -1,19 +1,24 @@
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chunkText, timeAgo, parseTabMessage, formatTabbedResponse } from '../util/text.js';
+import { chunkText, parseTabMessage, formatTabbedResponse } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
+import { sendChunkedResponse } from './send-helpers.js';
 import { getLogsDir } from '../util/paths.js';
 import { saveMedia, isOversized } from '../media/store.js';
 import { inboundLimiter, groupLimiter } from '../util/rate-limiter.js';
 import { processInboundMessage } from './pipeline.js';
 import { isChannelAdmin } from './admin.js';
-import type { Channel, ChannelContext, InboundMessageHandler, MediaAttachment, SendOptions } from './types.js';
+import type { Channel, ChannelContext, MediaAttachment, SendOptions } from './types.js';
 import type { GroupConfig } from '../types.js';
 import { VoiceState } from './voice-state.js';
 
-const DEFAULT_GROUP_CONFIG: GroupConfig = { activationMode: 'mention', maxResponsesPerMinute: 3, tabPerGroup: true };
+const DEFAULT_GROUP_CONFIG: GroupConfig = {
+  activationMode: 'mention',
+  maxResponsesPerMinute: 3,
+  tabPerGroup: true,
+};
 
 /**
  * Strip Telegram bot tokens out of strings before logging. Telegram embeds
@@ -28,17 +33,24 @@ export class TelegramChannel implements Channel {
   readonly id = 'telegram';
   readonly name = 'Telegram';
   readonly maxMessageLength = 4096;
-  readonly supportsStreaming = true;
-  readonly supportsMedia = true;
 
   private bot: TelegramBot;
   private ctx: ChannelContext;
   private activeChatIds: Set<number> = new Set();
+  // Set form of config.telegram.allowedUserIds for O(1) per-message membership
+  // checks. Built lazily in start() so config edits via reload (if added later)
+  // can call rebuildAllowedSet().
+  private allowedUserIdSet: Set<number> = new Set();
   private voice = new VoiceState('telegram');
   private botUserId: number | null = null;
   private botUsername: string | null = null;
   private mutedGroups = new Set<number>();
   private welcomeSent = new Set<number>();
+  // Polling-error tracking: warn the user once when the bot is silently broken
+  // (network drop, telegram 5xx, token revoked, etc.). Without this, the daemon
+  // looks fine but Telegram has stopped delivering inbound messages.
+  private pollingErrorTimes: number[] = [];
+  private pollingDegradedNotified = false;
 
   constructor(ctx: ChannelContext) {
     this.ctx = ctx;
@@ -55,16 +67,41 @@ export class TelegramChannel implements Channel {
   }
 
   async start(): Promise<void> {
-    // Clear pending updates from old sessions, then start polling
+    // Clear pending updates from old sessions, then start polling.
+    // node-telegram-bot-api's TS types don't include deleteWebHook, so we go
+    // through a typed shim rather than `as any`.
     try {
-      await (this.bot as any).deleteWebHook({ drop_pending_updates: true });
+      await (
+        this.bot as unknown as {
+          deleteWebHook: (opts: { drop_pending_updates: boolean }) => Promise<unknown>;
+        }
+      ).deleteWebHook({ drop_pending_updates: true });
     } catch (err) {
       logger.error('Failed to clear pending updates, starting anyway:', err);
     }
     // Initialize voice providers (STT + TTS)
     this.voice.init(this.ctx.config);
 
+    // Subscribe to library-level error events BEFORE startPolling so transient
+    // failures don't disappear into the void. node-telegram-bot-api emits
+    // 'polling_error' on network/auth/5xx issues — without a listener these
+    // were previously silently dropped, leaving the channel dead with no signal.
+    this.bot.on('polling_error', (err: Error) => {
+      logger.error('Telegram polling error:', sanitizeBotToken(err?.message || String(err)));
+      this.recordPollingError();
+    });
+    this.bot.on('error', (err: Error) => {
+      logger.error('Telegram client error:', sanitizeBotToken(err?.message || String(err)));
+    });
+
     this.bot.startPolling();
+
+    this.allowedUserIdSet = new Set(this.ctx.config.telegram.allowedUserIds);
+    if (this.allowedUserIdSet.size === 0) {
+      logger.warn(
+        'Telegram allowedUserIds is empty — bot will reject all inbound messages until you add at least one user ID.',
+      );
+    }
 
     // Cache bot identity for group mention detection
     try {
@@ -79,12 +116,34 @@ export class TelegramChannel implements Channel {
     logger.info('Telegram bot started (polling mode, cleared pending updates)');
   }
 
+  /**
+   * Track polling errors over a 60s rolling window. If we see 5+ errors in 60s
+   * we surface "polling degraded" exactly once via the notify callback so the
+   * user knows Telegram is broken instead of silently failing.
+   */
+  private recordPollingError(): void {
+    const now = Date.now();
+    this.pollingErrorTimes.push(now);
+    this.pollingErrorTimes = this.pollingErrorTimes.filter((t) => now - t < 60_000);
+    if (this.pollingErrorTimes.length >= 5 && !this.pollingDegradedNotified) {
+      this.pollingDegradedNotified = true;
+      this.ctx
+        .notifyCallback?.('⚠️ Telegram polling degraded (5+ errors in 60s). Check daemon.log.')
+        .catch((err) => logger.warn('Failed to send polling-degraded notice:', err));
+      // Reset notification flag after 5 minutes so a sustained outage that
+      // recovers and reoccurs can re-notify.
+      setTimeout(() => {
+        this.pollingDegradedNotified = false;
+      }, 5 * 60_000).unref();
+    }
+  }
+
   stop(): void {
     this.bot.stopPolling();
     logger.info('Telegram bot stopped');
   }
 
-  async sendMessage(peerId: string, text: string, options?: SendOptions): Promise<void> {
+  async sendMessage(peerId: string, text: string, _options?: SendOptions): Promise<void> {
     const chatId = Number(peerId);
     const chunks = chunkText(text);
     for (const chunk of chunks) {
@@ -114,8 +173,52 @@ export class TelegramChannel implements Channel {
         const status = errAny?.response?.statusCode;
         const isChatNotFound = status === 400 || /chat not found/i.test(errAny?.message || '');
         if (!isChatNotFound) {
-          logger.warn(`Telegram notify to ${userId} failed (status=${status ?? '?'}):`, sanitizeBotToken(errAny?.message || String(err)));
+          logger.warn(
+            `Telegram notify to ${userId} failed (status=${status ?? '?'}):`,
+            sanitizeBotToken(errAny?.message || String(err)),
+          );
         }
+      }
+    }
+  }
+
+  /**
+   * Send a media file to every recipient the bot would notify. Used by the
+   * pending-message dispatcher to deliver media queued by MCP tools.
+   * Routes by attachment type to the right Telegram primitive (sendVoice for
+   * voice messages, sendPhoto for images, sendVideo for video, sendDocument
+   * for everything else).
+   */
+  async broadcastMedia(media: MediaAttachment): Promise<void> {
+    const recipients = new Set<number>(this.activeChatIds);
+    for (const userId of this.ctx.config.telegram.allowedUserIds) recipients.add(userId);
+    if (recipients.size === 0) return;
+    const caption = media.caption ? { caption: media.caption.slice(0, 1024) } : undefined;
+    for (const chatId of recipients) {
+      try {
+        switch (media.type) {
+          case 'voice':
+            await this.bot.sendVoice(chatId, media.filePath, caption);
+            break;
+          case 'audio':
+            await this.bot.sendAudio(chatId, media.filePath, caption);
+            break;
+          case 'image':
+            await this.bot.sendPhoto(chatId, media.filePath, caption);
+            break;
+          case 'video':
+            await this.bot.sendVideo(chatId, media.filePath, caption);
+            break;
+          case 'document':
+          default:
+            await this.bot.sendDocument(chatId, media.filePath, caption);
+            break;
+        }
+      } catch (err) {
+        logger.warn(
+          `Telegram broadcastMedia to ${chatId} failed:`,
+          sanitizeBotToken(err instanceof Error ? err.message : String(err)),
+        );
       }
     }
   }
@@ -128,10 +231,6 @@ export class TelegramChannel implements Channel {
     }
   }
 
-  onMessage(_handler: InboundMessageHandler): void {
-    // Messages are handled directly in setupHandlers()
-  }
-
   // ─── Private ───
 
   private setupHandlers(): void {
@@ -142,7 +241,10 @@ export class TelegramChannel implements Channel {
 
       // Rate limit check
       if (!inboundLimiter.check(this.id)) {
-        await this.bot.sendMessage(chatId, "I'm receiving too many messages right now. Please wait a moment.");
+        await this.bot.sendMessage(
+          chatId,
+          "I'm receiving too many messages right now. Please wait a moment.",
+        );
         return;
       }
 
@@ -155,17 +257,20 @@ export class TelegramChannel implements Channel {
         if (hasMessages.c === 0) {
           this.welcomeSent.add(chatId);
           const welcomeText = msg.text?.trim() || '';
-          await this.bot.sendMessage(chatId, [
-            '\uD83D\uDC4B Welcome to Beecork!\n',
-            'Send any message and I\'ll pass it to Claude Code.',
-            '',
-            'Quick tips:',
-            '\u2022 /tab name message \u2014 organize work into tabs',
-            '\u2022 /tabs \u2014 see what\'s running',
-            '\u2022 /stop name \u2014 stop a tab',
-            '',
-            'Let\'s get started! Send me something.',
-          ].join('\n'));
+          await this.bot.sendMessage(
+            chatId,
+            [
+              '\uD83D\uDC4B Welcome to Beecork!\n',
+              "Send any message and I'll pass it to Claude Code.",
+              '',
+              'Quick tips:',
+              '\u2022 /tab name message \u2014 organize work into tabs',
+              "\u2022 /tabs \u2014 see what's running",
+              '\u2022 /stop name \u2014 stop a tab',
+              '',
+              "Let's get started! Send me something.",
+            ].join('\n'),
+          );
           // Don't return - let the actual message be processed too (unless it was just /start)
           if (welcomeText === '/start') return;
         } else {
@@ -193,10 +298,20 @@ export class TelegramChannel implements Channel {
 
         let shouldActivate = false;
         switch (groupConfig.activationMode) {
-          case 'mention': shouldActivate = !!isMentioned; break;
-          case 'reply': shouldActivate = !!isReplyToBot; break;
-          case 'keyword': shouldActivate = groupConfig.keywords?.some(kw => text.toLowerCase().includes(kw.toLowerCase())) ?? false; break;
-          case 'always': shouldActivate = true; break;
+          case 'mention':
+            shouldActivate = !!isMentioned;
+            break;
+          case 'reply':
+            shouldActivate = !!isReplyToBot;
+            break;
+          case 'keyword':
+            shouldActivate =
+              groupConfig.keywords?.some((kw) => text.toLowerCase().includes(kw.toLowerCase())) ??
+              false;
+            break;
+          case 'always':
+            shouldActivate = true;
+            break;
         }
 
         if (!shouldActivate) return;
@@ -223,43 +338,83 @@ export class TelegramChannel implements Channel {
         const photo = msg.photo[msg.photo.length - 1];
         downloadTasks.push(
           this.downloadTelegramFile(photo.file_id, 'jpg')
-            .then(fp => fp ? { type: 'image' as const, mimeType: 'image/jpeg', filePath: fp, fileName: `photo-${photo.file_id}.jpg` } : null)
-            .catch(() => null)
+            .then((fp) =>
+              fp
+                ? {
+                    type: 'image' as const,
+                    mimeType: 'image/jpeg',
+                    filePath: fp,
+                    fileName: `photo-${photo.file_id}.jpg`,
+                  }
+                : null,
+            )
+            .catch(() => null),
         );
       }
       if (msg.voice) {
         downloadTasks.push(
           this.downloadTelegramFile(msg.voice.file_id, 'ogg')
-            .then(fp => fp ? { type: 'voice' as const, mimeType: 'audio/ogg', filePath: fp, duration: msg.voice!.duration } : null)
-            .catch(() => null)
+            .then((fp) =>
+              fp ? { type: 'voice' as const, mimeType: 'audio/ogg', filePath: fp } : null,
+            )
+            .catch(() => null),
         );
       }
       if (msg.audio) {
         downloadTasks.push(
           this.downloadTelegramFile(msg.audio.file_id, 'mp3')
-            .then(fp => fp ? { type: 'audio' as const, mimeType: msg.audio!.mime_type || 'audio/mpeg', filePath: fp, fileName: msg.audio!.title, duration: msg.audio!.duration } : null)
-            .catch(() => null)
+            .then((fp) =>
+              fp
+                ? {
+                    type: 'audio' as const,
+                    mimeType: msg.audio!.mime_type || 'audio/mpeg',
+                    filePath: fp,
+                    fileName: msg.audio!.title,
+                  }
+                : null,
+            )
+            .catch(() => null),
         );
       }
       if (msg.document) {
         const ext = msg.document.file_name?.split('.').pop() || 'bin';
         downloadTasks.push(
           this.downloadTelegramFile(msg.document.file_id, ext)
-            .then(fp => fp ? { type: 'document' as const, mimeType: msg.document!.mime_type || 'application/octet-stream', filePath: fp, fileName: msg.document!.file_name } : null)
-            .catch(() => null)
+            .then((fp) =>
+              fp
+                ? {
+                    type: 'document' as const,
+                    mimeType: msg.document!.mime_type || 'application/octet-stream',
+                    filePath: fp,
+                    fileName: msg.document!.file_name,
+                  }
+                : null,
+            )
+            .catch(() => null),
         );
       }
       if (msg.video) {
         downloadTasks.push(
           this.downloadTelegramFile(msg.video.file_id, 'mp4')
-            .then(fp => fp ? { type: 'video' as const, mimeType: msg.video!.mime_type || 'video/mp4', filePath: fp, duration: msg.video!.duration } : null)
-            .catch(() => null)
+            .then((fp) =>
+              fp
+                ? {
+                    type: 'video' as const,
+                    mimeType: msg.video!.mime_type || 'video/mp4',
+                    filePath: fp,
+                  }
+                : null,
+            )
+            .catch(() => null),
         );
       }
       const downloadResults = await Promise.allSettled(downloadTasks);
       const media: MediaAttachment[] = downloadResults
-        .filter((r): r is PromiseFulfilledResult<MediaAttachment | null> => r.status === 'fulfilled' && r.value !== null)
-        .map(r => r.value!);
+        .filter(
+          (r): r is PromiseFulfilledResult<MediaAttachment | null> =>
+            r.status === 'fulfilled' && r.value !== null,
+        )
+        .map((r) => r.value!);
 
       // Transcribe voice messages if STT is configured
       await this.voice.transcribe(media);
@@ -288,13 +443,25 @@ export class TelegramChannel implements Channel {
         logger.error('Telegram: error handling message:', err);
         // Wrap the fallback send so a Telegram outage doesn't escalate to an
         // unhandledRejection on the message-event handler.
-        this.bot.sendMessage(chatId, 'Something went wrong processing your message. Check daemon logs for details.')
-          .catch(sendErr => logger.error('Telegram: failed to send fallback error message:', sendErr));
+        this.bot
+          .sendMessage(
+            chatId,
+            'Something went wrong processing your message. Check daemon logs for details.',
+          )
+          .catch((sendErr) =>
+            logger.error('Telegram: failed to send fallback error message:', sendErr),
+          );
       }
     });
   }
 
-  private async handleCommand(chatId: number, text: string, userId: number | undefined, messageId: number, isGroup = false): Promise<void> {
+  private async handleCommand(
+    chatId: number,
+    text: string,
+    userId: number | undefined,
+    messageId: number,
+    isGroup = false,
+  ): Promise<void> {
     // Telegram-only group commands
     if (text === '/mute' && isGroup) {
       this.mutedGroups.add(chatId);
@@ -311,12 +478,15 @@ export class TelegramChannel implements Channel {
 
     // Shared command handler (covers /tabs, /stop, /tab, /projects, /project, /newproject, /close, /fresh, /cost, /activity, /handoff, /history, /knowledge)
     const { handleSharedCommand } = await import('./command-handler.js');
-    const result = await handleSharedCommand({
-      userId: String(userId || 'default'),
-      text,
-      isAdmin: this.isAdmin(userId),
-      channelId: 'telegram',
-    }, this.ctx.tabManager);
+    const result = await handleSharedCommand(
+      {
+        userId: String(userId || 'default'),
+        text,
+        isAdmin: this.isAdmin(userId),
+        channelId: 'telegram',
+      },
+      this.ctx.tabManager,
+    );
 
     if (result.handled) {
       if (result.response) await this.bot.sendMessage(chatId, result.response);
@@ -333,7 +503,13 @@ export class TelegramChannel implements Channel {
     await this.handleMessage(chatId, text, messageId);
   }
 
-  private async handleMessage(chatId: number, text: string, messageId: number, media: MediaAttachment[] = [], isGroup = false): Promise<void> {
+  private async handleMessage(
+    chatId: number,
+    text: string,
+    messageId: number,
+    media: MediaAttachment[] = [],
+    isGroup = false,
+  ): Promise<void> {
     const { tabName } = parseTabMessage(text);
     if (!tabName && !text && media.length === 0) return;
 
@@ -350,9 +526,10 @@ export class TelegramChannel implements Channel {
     await this.setReaction(chatId, messageId, '⏳');
 
     // Typing indicator — keep refreshing every 4s
-    const sendTyping = () => this.bot.sendChatAction(chatId, 'typing').catch((err) => {
-      logger.error(`Typing indicator failed:`, err);
-    });
+    const sendTyping = () =>
+      this.bot.sendChatAction(chatId, 'typing').catch((err) => {
+        logger.error(`Typing indicator failed:`, err);
+      });
     await sendTyping();
     const typingInterval = setInterval(sendTyping, 4000);
 
@@ -362,10 +539,6 @@ export class TelegramChannel implements Channel {
     }, 120000);
 
     try {
-      let responseText: string;
-      let responseError: boolean;
-      let responseTab: string;
-
       // Telegram-specific: streaming message edits
       let streamMsgId: number | null = null;
       let streamBuffer = '';
@@ -380,15 +553,17 @@ export class TelegramChannel implements Channel {
         if (streamBuffer.length < 100 || now - lastEditTime < 1000) return;
         lastEditTime = now;
         try {
-          const prefix = effectiveTabForStream !== 'default' ? `[${effectiveTabForStream}] ` : '';
-          const preview = prefix + streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
+          const truncated = streamBuffer.slice(0, 4000) + (streamBuffer.length > 4000 ? '...' : '');
+          const preview = formatTabbedResponse(truncated, effectiveTabForStream);
           if (!streamMsgId) {
             const sent = await this.bot.sendMessage(chatId, preview);
             streamMsgId = sent.message_id;
           } else {
             await this.bot.editMessageText(preview, { chat_id: chatId, message_id: streamMsgId });
           }
-        } catch { /* edit failures are non-critical */ }
+        } catch {
+          /* edit failures are non-critical */
+        }
       };
 
       // Shared pipeline handles: routing, media prompt, progress, sendMessage, TTS
@@ -416,9 +591,9 @@ export class TelegramChannel implements Channel {
 
       // Update the effective tab for stream prefix (now known)
       effectiveTabForStream = pipelineResult.tabName;
-      responseText = pipelineResult.responseText;
-      responseError = pipelineResult.isError;
-      responseTab = pipelineResult.tabName;
+      const responseText = pipelineResult.responseText;
+      const responseError = pipelineResult.isError;
+      const responseTab = pipelineResult.tabName;
 
       // Telegram-specific: if streaming was active and no error, edit the final message
       if (streamMsgId && !responseError) {
@@ -433,8 +608,7 @@ export class TelegramChannel implements Channel {
         }
 
         try {
-          const prefix = responseTab !== 'default' ? `[${responseTab}] ` : '';
-          const finalText = prefix + responseText;
+          const finalText = formatTabbedResponse(responseText, responseTab);
           if (finalText.length <= 4096) {
             await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
           } else {
@@ -482,33 +656,39 @@ export class TelegramChannel implements Channel {
     const fullText = formatTabbedResponse(text, tabName);
     const chunks = chunkText(fullText);
 
-    // Telegram-specific: if the response would be >10 chunks, send a preview + the rest as a file.
+    // Telegram-specific quirk: if the response would be >10 chunks, send a
+    // preview + the rest as a file. This runs BEFORE sendChunkedResponse so the
+    // helper is only invoked for normal-sized responses.
     if (chunks.length > 10) {
       for (let i = 0; i < 3; i++) {
         await this.sendWithRetry(chatId, chunks[i]);
       }
       const tmpPath = path.join(getLogsDir(), `response-${Date.now()}.txt`);
       fs.writeFileSync(tmpPath, fullText);
-      await this.bot.sendDocument(chatId, tmpPath, { caption: `Full response (${chunks.length} chunks)` });
+      await this.bot.sendDocument(chatId, tmpPath, {
+        caption: `Full response (${chunks.length} chunks)`,
+      });
       fs.unlinkSync(tmpPath);
       return;
     }
 
-    for (const chunk of chunks) {
-      await this.sendWithRetry(chatId, chunk);
-    }
+    // Use the shared chunked-send helper so prefix/chunk/retry logic stays
+    // identical across Telegram/Discord/WhatsApp. Quirky per-chunk error
+    // logging (delivery-failures.log) stays in sendWithRetry.
+    await sendChunkedResponse({
+      text,
+      tabName,
+      maxLength: this.maxMessageLength,
+      retryLabel: 'telegram-send',
+      sendChunk: (chunk) => this.sendWithRetryRaw(chatId, chunk),
+    });
   }
 
   private async sendWithRetry(chatId: number, text: string): Promise<void> {
+    // Wrapped call used by the >10-chunk fallback path. retryWithBackoff +
+    // delivery-failures.log on permanent failure.
     try {
-      await retryWithBackoff(
-        // Send as plain text — Telegram's legacy "Markdown" parser silently mangles
-        // underscores/asterisks in Claude's responses (code identifiers, names),
-        // and Beecork has no escaping pass for it.
-        () => this.bot.sendMessage(chatId, text),
-        [1000, 5000, 15000],
-        'telegram-send',
-      );
+      await this.sendWithRetryRaw(chatId, text);
     } catch (err) {
       const failLog = path.join(getLogsDir(), 'delivery-failures.log');
       const sanitizedErr = sanitizeBotToken(err instanceof Error ? err.message : String(err));
@@ -516,6 +696,17 @@ export class TelegramChannel implements Channel {
       fs.appendFileSync(failLog, entry);
       logger.error(`Delivery failed after retries for chat ${chatId}`);
     }
+  }
+
+  private async sendWithRetryRaw(chatId: number, text: string): Promise<void> {
+    await retryWithBackoff(
+      // Send as plain text — Telegram's legacy "Markdown" parser silently mangles
+      // underscores/asterisks in Claude's responses (code identifiers, names),
+      // and Beecork has no escaping pass for it.
+      () => this.bot.sendMessage(chatId, text),
+      [1000, 5000, 15000],
+      'telegram-send',
+    );
   }
 
   private async downloadTelegramFile(fileId: string, extension: string): Promise<string | null> {
@@ -538,7 +729,10 @@ export class TelegramChannel implements Channel {
 
   private isAllowed(userId: number | undefined): boolean {
     if (!userId) return false;
-    return this.ctx.config.telegram.allowedUserIds.includes(userId);
+    // Set-based O(1) membership check; explicit empty-set check keeps the
+    // fail-closed contract documented in code.
+    if (this.allowedUserIdSet.size === 0) return false;
+    return this.allowedUserIdSet.has(userId);
   }
 
   private isAdmin(userId: number | undefined): boolean {

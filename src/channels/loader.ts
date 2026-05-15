@@ -54,8 +54,17 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
             continue;
           }
 
-          // Dynamic import — community channels run with full daemon access
-          logger.warn(`Loading community channel from ${dir} — ensure you trust this package`);
+          // Dynamic import — community channels run with full daemon access:
+          // they can read every config token (Telegram, Discord, WhatsApp,
+          // notification provider keys) AND every environment variable the
+          // daemon inherits (including SSH-agent sockets, GitHub tokens,
+          // anything sourced from your shell profile). A compromised
+          // community-channel package is effectively a root credential drop.
+          // Pin versions in package.json, audit before opting in, and treat
+          // every entry in `communityChannels` as a trust anchor.
+          logger.warn(
+            `Loading community channel "${dir}" — this package will have FULL access to your channel tokens (Telegram/Discord/WhatsApp) and every environment variable inherited by the daemon (including SSH keys). Only enable if you trust the package author and have audited the version.`,
+          );
           const module = await import(entryPath);
           const ChannelClass = module.default || module[Object.keys(module)[0]];
 
@@ -67,7 +76,12 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
           const instance = new ChannelClass(ctx) as Channel;
 
           // Validate it implements Channel interface (duck typing)
-          if (!instance.id || !instance.name || typeof instance.start !== 'function' || typeof instance.stop !== 'function') {
+          if (
+            !instance.id ||
+            !instance.name ||
+            typeof instance.start !== 'function' ||
+            typeof instance.stop !== 'function'
+          ) {
             logger.warn(`Community channel ${dir}: does not implement Channel interface`);
             continue;
           }

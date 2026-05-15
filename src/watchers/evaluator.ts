@@ -1,7 +1,9 @@
 import { execAsync } from '../tasks/scheduler.js';
 import type { Watcher } from './types.js';
 
-export async function evaluateWatcher(watcher: Watcher): Promise<{ triggered: boolean; output: string }> {
+export async function evaluateWatcher(
+  watcher: Watcher,
+): Promise<{ triggered: boolean; output: string }> {
   try {
     const { stdout } = await execAsync(watcher.checkCommand, { timeout: 30000 });
     const trimmed = stdout.trim();
@@ -24,13 +26,17 @@ function evaluateCondition(output: string, condition: string): boolean {
   if (condition.startsWith('> ')) {
     const num = parseFloat(output);
     const threshold = parseFloat(condition.slice(2));
-    if (Number.isNaN(num)) { return true; } // Can't parse = something's wrong = trigger
+    if (Number.isNaN(num)) {
+      return true;
+    } // Can't parse = something's wrong = trigger
     return num > threshold;
   }
   if (condition.startsWith('< ')) {
     const num = parseFloat(output);
     const threshold = parseFloat(condition.slice(2));
-    if (Number.isNaN(num)) { return true; }
+    if (Number.isNaN(num)) {
+      return true;
+    }
     return num < threshold;
   }
   if (condition === 'any') return output.length > 0;

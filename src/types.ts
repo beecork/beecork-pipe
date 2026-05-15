@@ -17,7 +17,6 @@ export interface ClaudeCodeConfig {
 
 export interface MemoryConfig {
   dbPath: string;
-  maxLongTermEntries: number;
 }
 
 export interface TabConfig {
@@ -38,7 +37,6 @@ export interface WhatsAppConfig {
   adminNumber?: string;
 }
 
-
 export interface VoiceConfig {
   sttProvider: 'whisper-api' | 'none';
   sttApiKey?: string;
@@ -55,11 +53,26 @@ export interface DiscordConfig {
   adminUserId?: string;
 }
 
+/**
+ * Webhook channel auth semantics:
+ *
+ * - When both `authToken` and `hmacSecret` are configured, EITHER mode
+ *   satisfies authentication (OR semantics). A valid Bearer token is enough
+ *   even if the HMAC signature is missing. There is no AND mode today.
+ * - Replay protection is NOT implemented. Callers must keep their payloads
+ *   idempotent — see L10 in the audit. Acceptable while the server binds to
+ *   127.0.0.1 only; revisit if remote exposure becomes a thing.
+ * - `allowUnauthLocalhost` is the explicit opt-in to run with no auth at all.
+ *   Useful for `curl localhost` from a trusted shell, but on a multi-user
+ *   host any local process can inject prompts into your tabs.
+ */
 export interface WebhookConfig {
   enabled: boolean;
   port: number;
   authToken?: string;
   hmacSecret?: string;
+  /** Set to true to skip the fail-secure auth check at start. NOT recommended on shared hosts. */
+  allowUnauthLocalhost?: boolean;
 }
 
 export interface GroupConfig {
@@ -69,18 +82,16 @@ export interface GroupConfig {
   keywords?: string[];
 }
 
-export interface NotificationConfig {
-  type: 'pushover' | 'ntfy' | 'webhook';
-  // Pushover
-  userKey?: string;
-  appToken?: string;
-  // ntfy
-  topic?: string;
-  server?: string;
-  // Webhook
-  url?: string;
-  headers?: Record<string, string>;
-}
+/**
+ * Discriminated union of notification provider configs. The `type` field
+ * narrows which fields are required so callers get full type safety instead
+ * of treating every field as optional. createNotificationProvider switches
+ * exhaustively on `type`.
+ */
+export type NotificationConfig =
+  | { type: 'pushover'; userKey: string; appToken: string }
+  | { type: 'ntfy'; topic: string; server?: string }
+  | { type: 'webhook'; url: string; headers?: Record<string, string> };
 
 export interface MediaGeneratorConfig {
   provider: string;
@@ -95,7 +106,6 @@ export interface MediaAttachment {
   mimeType: string;
   filePath: string;
   fileName?: string;
-  duration?: number;
   caption?: string;
 }
 
@@ -115,6 +125,8 @@ export interface BeecorkConfig {
   notifications?: NotificationConfig[];
   mediaGenerators?: MediaGeneratorConfig[];
   communityChannels?: string[];
+  /** Capability packs enabled via `beecork capabilities enable`. Owned by src/capabilities. */
+  capabilities?: import('./capabilities/types.js').EnabledCapability[];
   deployment: 'local' | 'vps';
 }
 
@@ -163,10 +175,7 @@ export interface StreamContentToolResult {
   content: string;
 }
 
-export type StreamContentBlock =
-  | StreamContentText
-  | StreamContentToolUse
-  | StreamContentToolResult;
+export type StreamContentBlock = StreamContentText | StreamContentToolUse | StreamContentToolResult;
 
 export interface StreamAssistant {
   type: 'assistant';
