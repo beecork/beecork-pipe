@@ -55,7 +55,7 @@ jobs:
 
       - name: Upgrade beecork on cloud server
         continue-on-error: true
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           ssh-private-key: ${{ secrets.CLOUD_SSH_KEY }}
 
