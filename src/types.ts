@@ -13,6 +13,15 @@ export interface ClaudeCodeConfig {
   computerUse?: boolean;
   /** Hard timeout per subprocess turn. Default 30 min. Set to 0 to disable. */
   maxRuntimeMs?: number;
+  /**
+   * Startup watchdog: kill (and retry once) a subprocess that produces ZERO
+   * events this long after spawn. A healthy claude emits its init event within
+   * seconds; prolonged total silence means it wedged on a stalled network
+   * socket (DNS/connection blip with no client-side timeout). Default 2 min.
+   * Set to 0 to disable. Disarms on the first event, so it never fires
+   * mid-task — long-running tools are unaffected.
+   */
+  silentTimeoutMs?: number;
 }
 
 export interface MemoryConfig {

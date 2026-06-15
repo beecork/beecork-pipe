@@ -31,11 +31,13 @@ vi.mock('../../src/knowledge/index.js', () => ({
 // and inspect the resume flag per invocation.
 type SendCall = { resume: boolean; sessionId: string; prompt: string; callbacks: SubprocessCallbacks };
 const sendCalls: SendCall[] = [];
-let sendScript: Array<(c: SubprocessCallbacks, sessionId: string) => void> = [];
+interface FakeSelf { sessionId: string; killReason: 'silent' | null }
+let sendScript: Array<(c: SubprocessCallbacks, sessionId: string, self: FakeSelf) => void> = [];
 
 vi.mock('../../src/session/subprocess.js', () => {
   class FakeSubprocess {
     sessionId: string;
+    killReason: 'silent' | null = null;
     private _running = false;
     constructor(_tab: string, _wd: string, _cfg: unknown, sessionId?: string) {
       this.sessionId = sessionId ?? 'fake-uuid';
@@ -46,7 +48,7 @@ vi.mock('../../src/session/subprocess.js', () => {
       const script = sendScript.shift();
       if (!script) throw new Error('No send script entry queued');
       // Drive asynchronously so the caller's Promise resolves first
-      setTimeout(() => { this._running = false; script(callbacks, this.sessionId); }, 0);
+      setTimeout(() => { this._running = false; script(callbacks, this.sessionId, this); }, 0);
     }
     kill() { this._running = false; }
     get isRunning() { return this._running; }
@@ -123,6 +125,15 @@ function emitStaleSessionError() {
       duration_ms: 1, session_id: sessionId,
     } as never);
     cb.onExit(1);
+  };
+}
+
+// Models the startup watchdog firing: claude emitted ZERO events, the watchdog
+// killed it with killReason='silent', and the process exits via SIGTERM (143).
+function emitSilentStall() {
+  return (cb: SubprocessCallbacks, _sessionId: string, self: FakeSelf) => {
+    self.killReason = 'silent';
+    cb.onExit(143);
   };
 }
 
@@ -213,5 +224,60 @@ describe('TabManager — stale-session retry', () => {
     expect(sendCalls).toHaveLength(1);
     expect(sendCalls[0].resume).toBe(false);
     expect(result.text).toBe('clean fire');
+  });
+});
+
+describe('TabManager — silent-stall retry', () => {
+  beforeEach(() => {
+    testDb = new Database(':memory:');
+    testDb.exec(TABS_SCHEMA);
+    sendCalls.length = 0;
+    sendScript = [];
+  });
+
+  it('retries once when the first subprocess stalls silently, returning the retry result', async () => {
+    const tabId = 'tab-silent-1';
+    testDb.prepare(
+      'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, NULL)'
+    ).run(tabId, 'test', 'sid-s1', 'idle', '/tmp');
+
+    sendScript = [emitSilentStall(), emitSuccess('recovered after blip')];
+
+    const mgr = new TabManager(baseConfig);
+    const result = await mgr.sendMessage('test', 'hello');
+
+    // Exactly one retry — two spawns total.
+    expect(sendCalls).toHaveLength(2);
+    expect(result.error).toBe(false);
+    expect(result.text).toBe('recovered after blip');
+
+    // The successful retry stores exactly one assistant row; the silent attempt stored none.
+    const assistantRows = testDb.prepare(
+      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ?'
+    ).get(tabId, 'assistant') as { count: number };
+    expect(assistantRows.count).toBe(1);
+  });
+
+  it('does not retry past one silent stall — surfaces a network-stall failure', async () => {
+    const tabId = 'tab-silent-2';
+    testDb.prepare(
+      'INSERT INTO tabs (id, name, session_id, status, working_dir, system_prompt) VALUES (?, ?, ?, ?, ?, NULL)'
+    ).run(tabId, 'test', 'sid-s2', 'idle', '/tmp');
+
+    sendScript = [emitSilentStall(), emitSilentStall()];
+
+    const mgr = new TabManager(baseConfig);
+    const result = await mgr.sendMessage('test', 'hello');
+
+    // One retry only — no third spawn.
+    expect(sendCalls).toHaveLength(2);
+    expect(result.error).toBe(true);
+    expect(result.text).toMatch(/network/i);
+
+    // No assistant row is stored for a silent failure (keeps shouldResume false).
+    const assistantRows = testDb.prepare(
+      'SELECT COUNT(*) as count FROM messages WHERE tab_id = ? AND role = ?'
+    ).get(tabId, 'assistant') as { count: number };
+    expect(assistantRows.count).toBe(0);
   });
 });

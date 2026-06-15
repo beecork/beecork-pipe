@@ -210,4 +210,104 @@ describe('ClaudeSubprocess', () => {
     sub.kill();
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
+
+  describe('startup watchdog', () => {
+    // Pull a handler registered via proc.<emitter>.on(event, fn) back out of the
+    // mock so tests can drive stdout/exit like the real child process would.
+    function handlerFor(emitter: { on: ReturnType<typeof vi.fn> }, event: string) {
+      const call = emitter.on.mock.calls.find((c) => c[0] === event);
+      return call?.[1] as ((arg?: unknown) => void) | undefined;
+    }
+
+    it('kills the subprocess and sets killReason after silentTimeoutMs of zero output', async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeMockProc();
+        const config = {
+          ...mockConfig,
+          claudeCode: { ...mockConfig.claudeCode, silentTimeoutMs: 2000 },
+        };
+        const sub = new ClaudeSubprocess('test', '/tmp', config);
+        await sub.send('hello', { onEvent: vi.fn(), onExit: vi.fn(), onError: vi.fn() });
+
+        expect(proc.kill).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(2000);
+
+        expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+        expect(sub.killReason).toBe('silent');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does NOT kill once the first event arrives — disarmed for good', async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeMockProc();
+        const config = {
+          ...mockConfig,
+          claudeCode: { ...mockConfig.claudeCode, silentTimeoutMs: 2000 },
+        };
+        const onEvent = vi.fn();
+        const sub = new ClaudeSubprocess('test', '/tmp', config);
+        await sub.send('hello', { onEvent, onExit: vi.fn(), onError: vi.fn() });
+
+        // First event arrives just before the deadline (claude initialized).
+        vi.advanceTimersByTime(1999);
+        const onData = handlerFor(proc.stdout, 'data')!;
+        onData(Buffer.from(JSON.stringify({ type: 'system', subtype: 'init' }) + '\n'));
+        expect(onEvent).toHaveBeenCalledTimes(1);
+
+        // Long-running tool: no further output for well past the threshold.
+        vi.advanceTimersByTime(60_000);
+
+        expect(proc.kill).not.toHaveBeenCalled();
+        expect(sub.killReason).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('clears the startup timer on exit so it cannot fire afterwards', async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeMockProc();
+        const config = {
+          ...mockConfig,
+          claudeCode: { ...mockConfig.claudeCode, silentTimeoutMs: 2000 },
+        };
+        const sub = new ClaudeSubprocess('test', '/tmp', config);
+        await sub.send('hello', { onEvent: vi.fn(), onExit: vi.fn(), onError: vi.fn() });
+
+        // Process exits quickly (e.g. auth error) before the watchdog deadline.
+        handlerFor(proc, 'exit')!(1);
+        vi.advanceTimersByTime(10_000);
+
+        expect(proc.kill).not.toHaveBeenCalled();
+        expect(sub.killReason).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not arm the watchdog when silentTimeoutMs is 0', async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeMockProc();
+        const config = {
+          ...mockConfig,
+          claudeCode: { ...mockConfig.claudeCode, silentTimeoutMs: 0 },
+        };
+        const sub = new ClaudeSubprocess('test', '/tmp', config);
+        await sub.send('hello', { onEvent: vi.fn(), onExit: vi.fn(), onError: vi.fn() });
+
+        vi.advanceTimersByTime(10 * 60 * 1000);
+
+        expect(proc.kill).not.toHaveBeenCalled();
+        expect(sub.killReason).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

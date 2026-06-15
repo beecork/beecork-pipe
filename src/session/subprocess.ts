@@ -51,6 +51,13 @@ export class ClaudeSubprocess {
   private buffer: string = '';
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private runtimeTimer: ReturnType<typeof setTimeout> | null = null;
+  private startupTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Set when the startup watchdog kills a subprocess that never emitted a
+   * single event — distinguishes a transient network/connection stall from a
+   * normal exit or a real wall-clock overrun, so the manager can retry once.
+   */
+  killReason: 'silent' | null = null;
   readonly sessionId: string;
 
   constructor(
@@ -94,6 +101,14 @@ export class ClaudeSubprocess {
         if (!line.trim()) continue;
         try {
           const event: StreamEvent = JSON.parse(line);
+          // First real event proves claude initialized and the socket is alive
+          // — the startup-stall window is over, so disarm the watchdog for good.
+          // It never re-arms, so legitimate multi-minute tool runs (which emit
+          // nothing on stdout until the tool returns) are never killed.
+          if (this.startupTimer) {
+            clearTimeout(this.startupTimer);
+            this.startupTimer = null;
+          }
           callbacks.onEvent(event);
         } catch {
           // Non-JSON line (verbose debug output), skip
@@ -119,6 +134,10 @@ export class ClaudeSubprocess {
         clearTimeout(this.runtimeTimer);
         this.runtimeTimer = null;
       }
+      if (this.startupTimer) {
+        clearTimeout(this.startupTimer);
+        this.startupTimer = null;
+      }
       callbacks.onError(err);
     });
 
@@ -131,6 +150,10 @@ export class ClaudeSubprocess {
       if (this.runtimeTimer) {
         clearTimeout(this.runtimeTimer);
         this.runtimeTimer = null;
+      }
+      if (this.startupTimer) {
+        clearTimeout(this.startupTimer);
+        this.startupTimer = null;
       }
       logger.info(`[${this.tabName}] Claude subprocess exited (code: ${code})`);
       callbacks.onExit(code);
@@ -150,6 +173,26 @@ export class ClaudeSubprocess {
         );
         this.kill();
       }, maxRuntimeMs);
+    }
+
+    // Startup watchdog. A healthy claude emits its init event within seconds of
+    // spawn. Total silence this long means it wedged on a stalled network socket
+    // (DNS/connection blip with no client-side timeout) and would otherwise sit
+    // idle until the 30-min maxRuntime kill. Unlike maxRuntime, this routes
+    // through onExit (kill only, no onError) so the manager retries once. It is
+    // disarmed on the first event, so it can only fire before claude initializes
+    // — long-running tools, which emit nothing on stdout until they return, are
+    // never affected.
+    const silentTimeoutMs = this.config.claudeCode.silentTimeoutMs ?? 120_000;
+    if (silentTimeoutMs > 0) {
+      this.startupTimer = setTimeout(() => {
+        if (!this.proc) return;
+        logger.warn(
+          `[${this.tabName}] No output ${silentTimeoutMs}ms after spawn — killing as silent network stall`,
+        );
+        this.killReason = 'silent';
+        this.kill();
+      }, silentTimeoutMs);
     }
   }
 

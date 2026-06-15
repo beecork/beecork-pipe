@@ -395,6 +395,59 @@ export class TabManager {
             return;
           }
 
+          // Silent network-stall recovery. The startup watchdog killed a
+          // subprocess that never emitted a single event — almost always a
+          // transient overnight DNS/connection blip that recovers within
+          // seconds. Mirror the stale-session retry above (capped by retryDepth)
+          // so a blip recovers inside a single fire instead of burning the full
+          // maxRuntime and counting toward the 5-failure auto-disable.
+          if (subprocess.killReason === 'silent') {
+            if (retryDepth === 0) {
+              logger.warn(
+                `[${tab.name}] Subprocess produced no output (suspected transient network stall) — retrying once.`,
+              );
+              // Don't touch the session — the subprocess may never have
+              // initialized one. Retry with identical args.
+              this.executeMessage(
+                tab,
+                prompt,
+                resume,
+                onTextChunk,
+                onToolUse,
+                compactionDepth,
+                forceFresh,
+                retryDepth + 1,
+              )
+                .then(resolve)
+                .catch(reject);
+              return;
+            }
+            // Retry already attempted and it stalled again — surface a
+            // network-specific failure instead of an empty "(no output)" so the
+            // user checks connectivity, not their auth/subscription. Resolve
+            // (not reject) with error:true; the scheduler counts this toward
+            // auto-disable exactly like the maxRuntime path, and reports it via
+            // the existing task-failure notification.
+            logger.warn(
+              `[${tab.name}] Still no output after retry — surfacing suspected network stall.`,
+            );
+            db.prepare(
+              'UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?',
+            ).run('idle', new Date().toISOString(), tab.name);
+            logActivity('task_failed', 'Subprocess silent stall (retry exhausted)', {
+              tabName: tab.name,
+            });
+            resolve({
+              text: 'Subprocess produced no output, even after a retry — suspected network/DNS stall. Check connectivity.',
+              costUsd: 0,
+              durationMs: 0,
+              sessionId: subprocess.sessionId,
+              error: true,
+            });
+            this.processNextInQueue(tab.name);
+            return;
+          }
+
           // Store assistant response. Skip empty content (typically failed/error runs) so
           // it doesn't trigger the hasDbHistory shouldResume override on future calls.
           if (result.text.trim() !== '') {
