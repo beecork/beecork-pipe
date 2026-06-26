@@ -144,7 +144,7 @@ export async function setupWizard(): Promise<void> {
         },
       },
       memory: {
-        dbPath: '~/.beecork/memory.db',
+        dbPath: '~/.beecork-pipe/memory.db',
       },
       projectScanPaths: scanPaths,
       deployment: 'local',

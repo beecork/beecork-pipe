@@ -13,7 +13,7 @@ const DEFAULT_PROJECT_SCAN_PATHS = ['~/Coding', '~/Projects', '~/code', '~/dev']
 /**
  * INTENTIONAL: --dangerously-skip-permissions is required for unattended operation.
  * Without it, Claude Code would block on every tool call waiting for user input.
- * Users can override defaultFlags in ~/.beecork/config.json.
+ * Users can override defaultFlags in ~/.beecork-pipe/config.json.
  */
 const DEFAULT_CONFIG: BeecorkConfig = {
   telegram: {
@@ -28,7 +28,7 @@ const DEFAULT_CONFIG: BeecorkConfig = {
     default: { ...DEFAULT_TAB_CONFIG },
   },
   memory: {
-    dbPath: '~/.beecork/memory.db',
+    dbPath: '~/.beecork-pipe/memory.db',
   },
   projectScanPaths: [...DEFAULT_PROJECT_SCAN_PATHS],
   deployment: 'local',

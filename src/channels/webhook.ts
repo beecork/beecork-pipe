@@ -42,7 +42,7 @@ export class WebhookChannel implements Channel {
     if (!config.authToken && !config.hmacSecret && !config.allowUnauthLocalhost) {
       logger.error(
         'Webhook channel refusing to start: no authToken or hmacSecret configured. ' +
-          'Set one in ~/.beecork/config.json under webhook.authToken/hmacSecret, or ' +
+          'Set one in ~/.beecork-pipe/config.json under webhook.authToken/hmacSecret, or ' +
           'explicitly opt in with webhook.allowUnauthLocalhost=true (NOT recommended on shared hosts).',
       );
       return;

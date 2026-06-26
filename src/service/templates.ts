@@ -1,7 +1,9 @@
 import os from 'node:os';
+import { getLogsDir } from '../util/paths.js';
 
 export function getLaunchdPlist(nodePath: string, daemonPath: string): string {
   const home = os.homedir();
+  const logsDir = getLogsDir(); // honors the config dir (~/.beecork-pipe) + BEECORK_HOME
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -18,9 +20,9 @@ export function getLaunchdPlist(nodePath: string, daemonPath: string): string {
     <key>KeepAlive</key>
     <true/>
     <key>StandardOutPath</key>
-    <string>${home}/.beecork/logs/daemon.stdout.log</string>
+    <string>${logsDir}/daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>${home}/.beecork/logs/daemon.stderr.log</string>
+    <string>${logsDir}/daemon.stderr.log</string>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>

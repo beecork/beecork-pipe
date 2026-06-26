@@ -477,7 +477,7 @@ program
     const entries = Object.entries(templates);
     if (entries.length === 0) {
       console.log('No tab templates configured.');
-      console.log('Add templates in ~/.beecork/config.json under "tabTemplates"');
+      console.log('Add templates in ~/.beecork-pipe/config.json under "tabTemplates"');
       return;
     }
     console.log(`\n${entries.length} template(s):\n`);

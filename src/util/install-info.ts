@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { getRuntimeInfoPath } from './paths.js';
 
 /**
- * Metadata the daemon writes to ~/.beecork/runtime.json at startup so the CLI
+ * Metadata the daemon writes to ~/.beecork-pipe/runtime.json at startup so the CLI
  * (and postinstall hook) can detect when daemon and CLI are running from
  * different physical installs of beecork — the most common silent-staleness
  * mode after `npm install -g beecork@<new>` lands in a prefix the daemon's

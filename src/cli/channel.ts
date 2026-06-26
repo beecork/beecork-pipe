@@ -175,7 +175,7 @@ beecork channel install ${name}
 
 ## Configuration
 
-Add to your \`~/.beecork/config.json\`:
+Add to your \`~/.beecork-pipe/config.json\`:
 
 \`\`\`json
 {

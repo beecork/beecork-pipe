@@ -8,13 +8,13 @@ const TASK_NAME = 'BeecorkDaemon';
 export function installWindowsService(binPath: string): void {
   const appData =
     process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming');
-  const logPath = path.join(appData, '.beecork', 'logs', 'daemon.log');
+  const logPath = path.join(appData, '.beecork-pipe', 'logs', 'daemon.log');
 
   // Ensure log directory exists
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
 
   // Create a wrapper script that runs beecork daemon
-  const wrapperPath = path.join(appData, '.beecork', 'start-daemon.bat');
+  const wrapperPath = path.join(appData, '.beecork-pipe', 'start-daemon.bat');
   fs.writeFileSync(wrapperPath, `@echo off\r\n"${binPath}" daemon >> "${logPath}" 2>&1\r\n`);
 
   try {
