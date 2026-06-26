@@ -13,7 +13,7 @@ import { autoHealInstall } from './util/auto-heal.js';
   const heal = autoHealInstall(import.meta.url);
   if (heal.action !== 'noop' && heal.action !== 'skip') {
     const target = heal.newDaemonScript ?? '(running daemon)';
-    process.stderr.write(`[beecork] auto-heal: ${heal.action} → ${target}\n`);
+    process.stderr.write(`[beecork-pipe] auto-heal: ${heal.action} → ${target}\n`);
   }
 }
 
@@ -463,7 +463,7 @@ ${os === 'darwin' ? 'On macOS: beecork runs as a launchd service.\n  Check: laun
 
 program
   .command('update')
-  .description('Update beecork to the latest version')
+  .description('Update beecork-pipe to the latest version')
   .option('--check', 'Check for updates without installing')
   .action(updateBeecork);
 

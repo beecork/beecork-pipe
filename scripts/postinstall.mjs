@@ -38,13 +38,13 @@ try {
   const { autoHealInstall } = await import(autoHealModule);
   const result = autoHealInstall(import.meta.url);
   if (result.action === 'rewrote-unit' || result.action === 'rewrote-and-signaled') {
-    process.stderr.write(`[beecork] launchd/systemd unit re-pointed at ${result.newDaemonScript}\n`);
+    process.stderr.write(`[beecork-pipe] launchd/systemd unit re-pointed at ${result.newDaemonScript}\n`);
   }
   if (result.action === 'signaled-daemon' || result.action === 'rewrote-and-signaled') {
-    process.stderr.write(`[beecork] running daemon signaled to restart on new code\n`);
+    process.stderr.write(`[beecork-pipe] running daemon signaled to restart on new code\n`);
   }
   // 'noop' / 'skip' → silent
 } catch (err) {
   // Never fail an install on auto-heal trouble — just leave a breadcrumb.
-  process.stderr.write(`[beecork] postinstall auto-heal skipped: ${err?.message ?? err}\n`);
+  process.stderr.write(`[beecork-pipe] postinstall auto-heal skipped: ${err?.message ?? err}\n`);
 }
