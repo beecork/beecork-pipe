@@ -2,7 +2,11 @@ import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
 
-const BEECORK_DIR = '.beecork';
+// Renamed from '.beecork' to '.beecork-pipe' when the pipe became `beecork-pipe`:
+// the `beecork` name (and `~/.beecork`) now belongs to the beecork coding agent.
+// Existing installs migrate their data dir as part of the rename; the BEECORK_HOME
+// env override still wins for anyone pinning a custom location.
+const BEECORK_DIR = '.beecork-pipe';
 
 export function getBeecorkHome(): string {
   return process.env.BEECORK_HOME || path.join(os.homedir(), BEECORK_DIR);

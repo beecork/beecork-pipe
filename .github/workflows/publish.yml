@@ -53,18 +53,7 @@ jobs:
         if: ${{ inputs.version_bump != 'none' }}
         run: git push && git push --tags
 
-      - name: Upgrade beecork on cloud server
-        continue-on-error: true
-        uses: webfactory/ssh-agent@v0.10.0
-        with:
-          ssh-private-key: ${{ secrets.CLOUD_SSH_KEY }}
-
-      - name: Run cloud upgrade
-        continue-on-error: true
-        run: |
-          ssh-keyscan -H 167.235.142.11 >> ~/.ssh/known_hosts
-          VERSION=$(node -p "require('./package.json').version")
-          echo "Waiting 30s for npm CDN propagation..."
-          sleep 30
-          echo "Upgrading cloud server to beecork@${VERSION}..."
-          ssh root@167.235.142.11 "npm install -g beecork@${VERSION} && for u in \$(ls /home/ | grep ^bee); do su - \$u -c 'XDG_RUNTIME_DIR=/run/user/\$(id -u) systemctl --user restart beecork' || true; done && echo 'All user daemons restarted'"
+      # NOTE: the auto cloud-upgrade step was removed when the pipe was renamed to
+      # `beecork-pipe`. The hosted cloud server (Hetzner 167.235.142.11) was
+      # decommissioned on 2026-05-10, and the step hardcoded the old `beecork`
+      # package name. Re-add a corrected step here if/when the cloud is redeployed.

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/beecork/beecork/main/logos/horizontal.svg" alt="Beecork" width="400">
+  <img src="https://raw.githubusercontent.com/beecork/beecork-pipe/main/logos/horizontal.svg" alt="Beecork" width="400">
 </p>
 
 <p align="center">
@@ -7,9 +7,9 @@
 </p>
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/beecork"><img src="https://img.shields.io/npm/v/beecork" alt="npm version"></a>
-  <a href="https://github.com/beecork/beecork/actions"><img src="https://github.com/beecork/beecork/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/npm/l/beecork" alt="License"></a>
+  <a href="https://www.npmjs.com/package/beecork-pipe"><img src="https://img.shields.io/npm/v/beecork-pipe" alt="npm version"></a>
+  <a href="https://github.com/beecork/beecork-pipe/actions"><img src="https://github.com/beecork/beecork-pipe/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/npm/l/beecork-pipe" alt="License"></a>
 </p>
 
 ---
@@ -32,24 +32,24 @@ Message Claude Code from Telegram at 2am — it wakes up, does the work, message
 
 ```bash
 # Install
-npm install -g beecork
+npm install -g beecork-pipe
 
 # Interactive setup (Telegram token, Claude Code path, background service)
 beecork setup
 
 # Start
-beecork start
+beecork-pipe start
 ```
 
 Then message your Telegram bot. Claude Code handles the rest.
 
-See [Getting Started](https://github.com/beecork/beecork/blob/main/docs/getting-started.md) for the full walkthrough.
+See [Getting Started](https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md) for the full walkthrough.
 
 ## CLI
 
 ```bash
 # Core
-beecork start              # Start the daemon
+beecork-pipe start              # Start the daemon
 beecork stop               # Stop the daemon
 beecork status             # Check if running
 beecork setup              # Set up Beecork (Telegram + system service)
@@ -107,7 +107,7 @@ Run `beecork --help` for the full list of commands.
 | **VPS** | Always-on — web scraping, monitoring, API calls, server management. Requires a full OS environment (Node.js, Claude Code CLI, system service). |
 | **[Beecork Cloud](https://beecork.com/cloud)** | Zero setup — a full cloud computer with everything pre-configured. No terminal, no installation. |
 
-Local install is `npm install -g beecork`. VPS requires the same plus a properly configured server environment. Beecork Cloud handles all of that for you.
+Local install is `npm install -g beecork-pipe`. VPS requires the same plus a properly configured server environment. Beecork Cloud handles all of that for you.
 
 ## Architecture
 
@@ -129,16 +129,16 @@ Telegram/WhatsApp/Discord/Webhook
 
 - [Discord](https://discord.gg/wEM9avTzb) — Chat, ask questions, share what you've built
 - [Twitter/X](https://x.com/BeecorkAI) — Updates, demos, announcements
-- [GitHub Discussions](https://github.com/beecork/beecork/discussions) — Feature ideas, Q&A
+- [GitHub Discussions](https://github.com/beecork/beecork-pipe/discussions) — Feature ideas, Q&A
 
 ## Documentation
 
-- [Getting Started](https://github.com/beecork/beecork/blob/main/docs/getting-started.md) — Full setup walkthrough
-- [Use Cases](https://github.com/beecork/beecork/blob/main/docs/use-cases.md) — What you can build with Beecork
-- [Troubleshooting](https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md) — Common issues and fixes
-- [Comparison](https://github.com/beecork/beecork/blob/main/docs/comparison.md) — How Beecork compares to alternatives
-- [Contributing](https://github.com/beecork/beecork/blob/main/CONTRIBUTING.md) — How to contribute
-- [Security](https://github.com/beecork/beecork/blob/main/SECURITY.md) — Reporting vulnerabilities
+- [Getting Started](https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md) — Full setup walkthrough
+- [Use Cases](https://github.com/beecork/beecork-pipe/blob/main/docs/use-cases.md) — What you can build with Beecork
+- [Troubleshooting](https://github.com/beecork/beecork-pipe/blob/main/docs/troubleshooting.md) — Common issues and fixes
+- [Comparison](https://github.com/beecork/beecork-pipe/blob/main/docs/comparison.md) — How Beecork compares to alternatives
+- [Contributing](https://github.com/beecork/beecork-pipe/blob/main/CONTRIBUTING.md) — How to contribute
+- [Security](https://github.com/beecork/beecork-pipe/blob/main/SECURITY.md) — Reporting vulnerabilities
 
 ## Requirements
 
@@ -149,4 +149,4 @@ Telegram/WhatsApp/Discord/Webhook
 
 ## License
 
-[MIT](https://github.com/beecork/beecork/blob/main/LICENSE)
+[MIT](https://github.com/beecork/beecork-pipe/blob/main/LICENSE)

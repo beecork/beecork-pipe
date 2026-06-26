@@ -1,10 +1,10 @@
 {
-  "name": "beecork",
+  "name": "beecork-pipe",
   "version": "1.7.1",
   "description": "Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock",
   "type": "module",
   "bin": {
-    "beecork": "dist/index.js"
+    "beecork-pipe": "dist/index.js"
   },
   "engines": {
     "node": ">=24"
@@ -69,11 +69,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/beecork/beecork.git"
+    "url": "https://github.com/beecork/beecork-pipe.git"
   },
   "homepage": "https://beecork.com",
   "bugs": {
-    "url": "https://github.com/beecork/beecork/issues"
+    "url": "https://github.com/beecork/beecork-pipe/issues"
   },
   "author": "Beecork <hello@beecork.com>",
   "license": "MIT"
