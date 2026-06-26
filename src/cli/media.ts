@@ -119,7 +119,7 @@ export async function mediaSetup(): Promise<void> {
   config.mediaGenerators = generators;
   saveConfig(config);
   console.log(`\n✓ ${generators.length} media provider(s) configured.`);
-  console.log('Restart daemon to activate: beecork stop && beecork start\n');
+  console.log('Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
   rl.close();
 }
 

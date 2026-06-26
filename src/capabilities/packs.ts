@@ -19,7 +19,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'Notion integration token (from notion.so/my-integrations)',
     apiKeyEnvVar: 'NOTION_API_KEY',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
+    setupUrl: 'https://github.com/beecork/beecork-pipe/blob/main/docs/use-cases.md',
   },
 
   // Development
@@ -37,7 +37,7 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'GitHub personal access token (from github.com/settings/tokens)',
     apiKeyEnvVar: 'GITHUB_TOKEN',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
+    setupUrl: 'https://github.com/beecork/beecork-pipe/blob/main/docs/use-cases.md',
   },
 
   // Data
@@ -54,6 +54,6 @@ export const CAPABILITY_PACKS: CapabilityPack[] = [
     requiresApiKey: true,
     apiKeyHint: 'PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/db)',
     apiKeyEnvVar: 'DATABASE_URL',
-    setupUrl: 'https://github.com/beecork/beecork/blob/main/docs/use-cases.md',
+    setupUrl: 'https://github.com/beecork/beecork-pipe/blob/main/docs/use-cases.md',
   },
 ];

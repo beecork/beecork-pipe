@@ -15,7 +15,7 @@ import {
  *
  * What "divergence" means:
  *   The daemon's launchd plist (or systemd unit) hard-codes an absolute path
- *   to dist/daemon.js. If `npm install -g beecork@<new>` lands in a different
+ *   to dist/daemon.js. If `npm install -g beecork-pipe@<new>` lands in a different
  *   npm prefix than the one the unit file points at, the daemon keeps running
  *   the old code while the CLI shows the new version. Bug reports get
  *   misdiagnosed because the user thinks both are on the new version.
@@ -44,7 +44,7 @@ export function autoHealInstall(fromFileUrl: string): HealResult {
 
     const unitPath = getServiceUnitPath();
     if (!unitPath || !fs.existsSync(unitPath)) {
-      // No installed service — beecork has been npm-installed but `beecork setup` (or
+      // No installed service — beecork has been npm-installed but `beecork-pipe setup` (or
       // equivalent) hasn't been run yet. Nothing to heal.
       return { action: 'skip', reason: 'no service unit file present' };
     }

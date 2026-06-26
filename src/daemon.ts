@@ -308,13 +308,13 @@ async function main(): Promise<void> {
   setImmediate(() => {
     void (async () => {
       try {
-        const { stdout } = await execFileAsync('npm', ['view', 'beecork', 'version'], {
+        const { stdout } = await execFileAsync('npm', ['view', 'beecork-pipe', 'version'], {
           timeout: 10000,
         });
         const latest = stdout.trim();
         if (latest && latest !== VERSION) {
           await broadcastNotify(
-            `📦 Update available: v${VERSION} → v${latest}\nRun: beecork update`,
+            `📦 Update available: v${VERSION} → v${latest}\nRun: beecork-pipe update`,
           );
           logger.info(`Update available: v${VERSION} → v${latest}`);
         }

@@ -50,7 +50,7 @@ function signalWatcherReload(): void {
   fs.writeFileSync(WATCHER_RELOAD_SIGNAL, String(Date.now()));
 }
 
-const server = new Server({ name: 'beecork', version: VERSION }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'beecork-pipe', version: VERSION }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: TOOL_DEFINITIONS,

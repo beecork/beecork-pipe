@@ -44,7 +44,7 @@ export function mcpList(): void {
   const servers = Object.entries(config.mcpServers);
   if (servers.length === 0) {
     console.log('No MCP servers configured.');
-    console.log('Add one: beecork mcp add <name> <command> [args...]');
+    console.log('Add one: beecork-pipe mcp add <name> <command> [args...]');
     return;
   }
   console.log(`\n${servers.length} MCP server(s):\n`);

@@ -98,7 +98,7 @@ export async function runDoctor(): Promise<void> {
     checks.push({
       name: 'Config',
       status: 'fail',
-      message: `Not found at ${configPath}. Run: beecork setup`,
+      message: `Not found at ${configPath}. Run: beecork-pipe setup`,
     });
   }
 

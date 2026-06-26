@@ -19,7 +19,7 @@ export function channelInstall(packageName: string): void {
   try {
     execFileSync('npm', ['install', '-g', fullName], { stdio: 'inherit' });
     console.log(`\nChannel "${fullName}" installed.`);
-    console.log('Restart the daemon to activate: beecork stop && beecork start');
+    console.log('Restart the daemon to activate: beecork-pipe stop && beecork-pipe start');
   } catch {
     console.error(`Failed to install ${fullName}. Check the package name and try again.`);
     process.exit(1);
@@ -93,7 +93,7 @@ export function channelCreate(name: string): void {
   fs.writeFileSync(
     path.join(dir, 'src', 'index.ts'),
     `// ${pkgName} — Beecork channel implementation
-// See: https://github.com/beecork/beecork for Channel interface docs
+// See: https://github.com/beecork/beecork-pipe for Channel interface docs
 
 // Import the Channel interface type from beecork
 // Note: beecork is a peer dependency
@@ -169,7 +169,7 @@ A Beecork channel plugin for ${name}.
 ## Installation
 
 \`\`\`bash
-beecork channel install ${name}
+beecork-pipe channel install ${name}
 # or: npm install -g ${pkgName}
 \`\`\`
 
@@ -218,7 +218,7 @@ export function channelList(): void {
     const lines = output.split('\n').filter((line) => line.includes(CHANNEL_PREFIX));
     if (lines.length === 0) {
       console.log('No community channels installed.');
-      console.log(`Install one: beecork channel install <name>`);
+      console.log(`Install one: beecork-pipe channel install <name>`);
       return;
     }
     console.log(`\n${lines.length} community channel(s):\n`);

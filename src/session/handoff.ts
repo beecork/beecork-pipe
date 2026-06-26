@@ -1,5 +1,5 @@
 /**
- * Session handoff helpers — used by both the CLI (`beecork attach`) and the
+ * Session handoff helpers — used by both the CLI (`beecork-pipe attach`) and the
  * shared command handler (`/handoff` from any channel).
  *
  * Moved here from `cli/handoff.ts` so daemon-shared code (channels, MCP) can
@@ -47,7 +47,7 @@ export function formatHandoffInfo(info: TabHandoffInfo): string {
     `Last activity: ${info.lastActivity}`,
     '',
     'To resume in terminal:',
-    `  beecork attach ${info.name}`,
+    `  beecork-pipe attach ${info.name}`,
     '',
     'Or manually:',
     `  cd ${info.workingDir}`,

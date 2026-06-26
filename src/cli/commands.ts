@@ -16,7 +16,7 @@ function requireDb(): Database.Database {
   try {
     return getDb();
   } catch {
-    console.error('Database not initialized — run "beecork setup" first.');
+    console.error('Database not initialized — run "beecork-pipe setup" first.');
     process.exit(1);
   }
 }
@@ -106,7 +106,7 @@ export async function showStatus(): Promise<void> {
 
     closeDb();
   } catch {
-    console.log('\n(database not initialized — run "beecork setup" first)');
+    console.log('\n(database not initialized — run "beecork-pipe setup" first)');
   }
 
   console.log('');
@@ -258,13 +258,13 @@ export async function deleteMemory(id: string): Promise<void> {
 export async function updateBeecork(options: { check?: boolean }): Promise<void> {
   if (options.check) {
     try {
-      const latest = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
+      const latest = execSync('npm view beecork-pipe version', { encoding: 'utf-8' }).trim();
       const current = VERSION;
       if (latest === current) {
         console.log(`Already up to date (v${current})`);
       } else {
         console.log(`Update available: v${current} → v${latest}`);
-        console.log('Run `beecork update` to install.');
+        console.log('Run `beecork-pipe update` to install.');
       }
     } catch {
       console.log('Could not check for updates.');
@@ -279,13 +279,13 @@ export async function updateBeecork(options: { check?: boolean }): Promise<void>
     await stopDaemon();
   }
 
-  console.log(`Updating beecork from v${VERSION}...`);
+  console.log(`Updating beecork-pipe from v${VERSION}...`);
   try {
-    execSync('npm install -g beecork@latest', { stdio: 'inherit' });
-    const newVersion = execSync('npm view beecork version', { encoding: 'utf-8' }).trim();
+    execSync('npm install -g beecork-pipe@latest', { stdio: 'inherit' });
+    const newVersion = execSync('npm view beecork-pipe version', { encoding: 'utf-8' }).trim();
     console.log(`Update complete! v${VERSION} → v${newVersion}`);
   } catch {
-    console.error('Update failed. Try running: npm install -g beecork@latest');
+    console.error('Update failed. Try running: npm install -g beecork-pipe@latest');
   }
 
   // Restart if it was running — spawn the NEW binary so the freshly installed
@@ -293,9 +293,9 @@ export async function updateBeecork(options: { check?: boolean }): Promise<void>
   if (pid) {
     console.log('Restarting daemon...');
     try {
-      execSync('beecork start', { stdio: 'inherit' });
+      execSync('beecork-pipe start', { stdio: 'inherit' });
     } catch {
-      console.error('Could not restart daemon. Run "beecork start" manually.');
+      console.error('Could not restart daemon. Run "beecork-pipe start" manually.');
     }
   }
 }

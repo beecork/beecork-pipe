@@ -14,7 +14,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 
 export interface OpenDbOptions {
-  /** Open the file read-only (used by `beecork doctor` for status snapshots). */
+  /** Open the file read-only (used by `beecork-pipe doctor` for status snapshots). */
   readonly?: boolean;
   /**
    * If true, restrict file mode to 0o600 after open. Daemon side wants this;

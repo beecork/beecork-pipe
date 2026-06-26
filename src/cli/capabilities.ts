@@ -39,7 +39,7 @@ export async function enableCapability(packId: string): Promise<void> {
 
   enablePack(packId, apiKey);
   console.log(`\n✓ ${pack.name} enabled.`);
-  console.log('  Restart daemon to activate: beecork stop && beecork start\n');
+  console.log('  Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
 }
 
 export async function listCapabilities(): Promise<void> {
@@ -69,8 +69,8 @@ export async function listCapabilities(): Promise<void> {
     console.log('');
   }
 
-  console.log('  Enable: beecork enable <name>');
-  console.log('  Example: beecork enable github\n');
+  console.log('  Enable: beecork-pipe enable <name>');
+  console.log('  Example: beecork-pipe enable github\n');
 }
 
 export async function disableCapability(packId: string): Promise<void> {
@@ -81,5 +81,5 @@ export async function disableCapability(packId: string): Promise<void> {
   }
   disablePack(packId);
   console.log(`\n✓ ${packId} disabled.`);
-  console.log('  Restart daemon to apply: beecork stop && beecork start\n');
+  console.log('  Restart daemon to apply: beecork-pipe stop && beecork-pipe start\n');
 }

@@ -772,7 +772,7 @@ export function getDashboardHtml(token: string): string {
 
   // --- Update ---
   const PACKAGE_LABELS = {
-    'beecork': 'Beecork',
+    'beecork-pipe': 'Beecork Pipe',
     '@anthropic-ai/claude-code': 'Claude Code',
   };
 
@@ -817,7 +817,7 @@ export function getDashboardHtml(token: string): string {
         body: '{}',
       });
       if (result.success) {
-        log.textContent += 'Done!\\n\\nRestart daemon to use the new version:\\n  beecork stop && beecork start';
+        log.textContent += 'Done!\\n\\nRestart daemon to use the new version:\\n  beecork-pipe stop && beecork-pipe start';
         loadUpdateStatus();
       } else {
         log.textContent += 'Error: ' + (result.error || 'Unknown error');

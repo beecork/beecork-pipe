@@ -12,7 +12,7 @@ export async function storeSearch(query: string): Promise<void> {
   console.log(`\nSearching for "${query}"...\n`);
 
   try {
-    // Search npm registry for beecork packages
+    // Search npm registry for beecork-pipe packages
     const response = await fetch(
       `https://registry.npmjs.org/-/v1/search?text=beecork+${encodeURIComponent(query)}&size=20`,
       { signal: AbortSignal.timeout(10000) },
@@ -31,7 +31,7 @@ export async function storeSearch(query: string): Promise<void> {
     );
 
     if (packages.length === 0) {
-      console.log(`No beecork packages found for "${query}".`);
+      console.log(`No beecork-pipe packages found for "${query}".`);
       console.log(
         'Community packages use naming convention: beecork-capability-*, beecork-media-*, beecork-channel-*',
       );
@@ -51,7 +51,7 @@ export async function storeSearch(query: string): Promise<void> {
       console.log('');
     }
 
-    console.log('Install: beecork store install <package-name>\n');
+    console.log('Install: beecork-pipe store install <package-name>\n');
   } catch (err) {
     console.error('Search failed:', err);
     console.log('Try manually: npm search beecork');
@@ -77,7 +77,7 @@ export function storeInstall(packageName: string): void {
   try {
     execFileSync('npm', ['install', '-g', fullName], { stdio: 'inherit' });
     console.log(`\n${fullName} installed.`);
-    console.log('Restart daemon to activate: beecork stop && beecork start\n');
+    console.log('Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
   } catch {
     // If beecork-capability- failed, try other prefixes
     if (fullName.startsWith('beecork-capability-')) {
@@ -88,7 +88,7 @@ export function storeInstall(packageName: string): void {
         try {
           execFileSync('npm', ['install', '-g', altName], { stdio: 'inherit' });
           console.log(`\n${altName} installed.`);
-          console.log('Restart daemon to activate: beecork stop && beecork start\n');
+          console.log('Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
           return;
         } catch {
           continue;
@@ -96,7 +96,7 @@ export function storeInstall(packageName: string): void {
       }
     }
     console.error(`\nFailed to install ${fullName}. Check the package name.`);
-    console.log('Search available packages: beecork store search <query>\n');
+    console.log('Search available packages: beecork-pipe store search <query>\n');
   }
 }
 
@@ -133,7 +133,7 @@ export async function storeInfo(packageName: string): Promise<void> {
     if (info?.homepage) console.log(`  Homepage: ${info.homepage}`);
     if (info?.repository?.url) console.log(`  Repository: ${info.repository.url}`);
     console.log(`  License: ${info?.license || 'Unknown'}`);
-    console.log(`\n  Install: beecork store install ${data.name}\n`);
+    console.log(`\n  Install: beecork-pipe store install ${data.name}\n`);
   } catch (err) {
     console.error('Failed to fetch package info:', err);
   }

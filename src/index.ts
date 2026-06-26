@@ -6,7 +6,7 @@ import { setupWizard } from './cli/setup.js';
 import { autoHealInstall } from './util/auto-heal.js';
 
 // Auto-heal install-path divergence: if the daemon is running from a different
-// beecork install than this CLI binary (e.g. user did `npm install -g beecork@latest`
+// beecork install than this CLI binary (e.g. user did `npm install -g beecork-pipe@latest`
 // to a different prefix than the launchd plist points at), rewrite the unit file
 // and signal the daemon to restart. Idempotent no-op otherwise. Never blocks the CLI.
 {
@@ -34,7 +34,7 @@ import {
 const program = new Command();
 
 program
-  .name('beecork')
+  .name('beecork-pipe')
   .version(VERSION)
   .description(
     'Claude Code always-on infrastructure — a phone number, a memory, and an alarm clock',
@@ -198,7 +198,7 @@ program
     const config = getConfig();
     config.discord = { token, allowedUserIds: userId ? [userId] : [] };
     saveConfig(config);
-    console.log('\n✓ Discord configured. Restart daemon: beecork stop && beecork start\n');
+    console.log('\n✓ Discord configured. Restart daemon: beecork-pipe stop && beecork-pipe start\n');
     rl.close();
   });
 
@@ -227,11 +227,11 @@ program
       if (getDaemonPid()) {
         const { execSync } = await import('node:child_process');
         try {
-          execSync('beecork stop', { stdio: 'ignore' });
-          execSync('beecork start', { stdio: 'ignore' });
+          execSync('beecork-pipe stop', { stdio: 'ignore' });
+          execSync('beecork-pipe start', { stdio: 'ignore' });
           console.log('  Daemon restarted.');
         } catch {
-          console.log('  Restart daemon: beecork stop && beecork start');
+          console.log('  Restart daemon: beecork-pipe stop && beecork-pipe start');
         }
       }
       return;
@@ -325,14 +325,14 @@ program
                 console.log('  Restarting daemon with WhatsApp enabled...');
                 const { execSync } = await import('node:child_process');
                 try {
-                  execSync('beecork stop', { stdio: 'ignore' });
-                  execSync('beecork start', { stdio: 'ignore' });
+                  execSync('beecork-pipe stop', { stdio: 'ignore' });
+                  execSync('beecork-pipe start', { stdio: 'ignore' });
                   console.log('  ✓ Daemon restarted.\n');
                 } catch {
-                  console.log('  Could not restart daemon. Run: beecork stop && beecork start\n');
+                  console.log('  Could not restart daemon. Run: beecork-pipe stop && beecork-pipe start\n');
                 }
               } else {
-                console.log('  Start the daemon: beecork start\n');
+                console.log('  Start the daemon: beecork-pipe start\n');
               }
               process.exit(0);
             }
@@ -362,7 +362,7 @@ program
       console.log('Waiting for QR code... (Ctrl+C to cancel)\n');
     } catch (err) {
       console.error('Failed to connect to WhatsApp:', err instanceof Error ? err.message : err);
-      console.log('\nConfig is saved. You can try pairing later by running: beecork whatsapp');
+      console.log('\nConfig is saved. You can try pairing later by running: beecork-pipe whatsapp');
       process.exit(1);
     }
   });
@@ -396,7 +396,7 @@ program
     console.log(
       `  Example: curl -X POST http://localhost:${port}/webhook/default -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"prompt":"hello"}'`,
     );
-    console.log('\n  Restart daemon: beecork stop && beecork start\n');
+    console.log('\n  Restart daemon: beecork-pipe stop && beecork-pipe start\n');
     rl.close();
   });
 
@@ -421,9 +421,9 @@ program
       console.log('\nClaude can now control your mouse, keyboard, and screen.');
       console.log('Make sure you have granted permissions:');
       console.log('  macOS: System Settings → Privacy → Screen Recording + Accessibility');
-      console.log('  Guide: https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md');
+      console.log('  Guide: https://github.com/beecork/beecork-pipe/blob/main/docs/troubleshooting.md');
     }
-    console.log('\nRestart daemon to apply: beecork stop && beecork start\n');
+    console.log('\nRestart daemon to apply: beecork-pipe stop && beecork-pipe start\n');
   });
 
 program
@@ -439,23 +439,23 @@ Beecork Quickstart
    npm install -g @anthropic-ai/claude-code
 
 2. Run the setup wizard:
-   beecork setup
+   beecork-pipe setup
 
 3. Start the daemon:
-   beecork start
+   beecork-pipe start
 
 4. Send a message on Telegram to your bot
 
 5. Check status:
-   beecork status
+   beecork-pipe status
 
 Useful commands:
-  beecork tabs      \u2014 List active tabs
-  beecork logs      \u2014 View daemon logs
-  beecork doctor    \u2014 Run diagnostics
-  beecork dashboard \u2014 Open web dashboard
-  beecork tasks list \u2014 View scheduled tasks
-  beecork watches    \u2014 View active watchers
+  beecork-pipe tabs      \u2014 List active tabs
+  beecork-pipe logs      \u2014 View daemon logs
+  beecork-pipe doctor    \u2014 Run diagnostics
+  beecork-pipe dashboard \u2014 Open web dashboard
+  beecork-pipe tasks list \u2014 View scheduled tasks
+  beecork-pipe watches    \u2014 View active watchers
 
 ${os === 'darwin' ? 'On macOS: beecork runs as a launchd service.\n  Check: launchctl list | grep beecork' : ''}${os === 'linux' ? 'On Linux: beecork runs as a systemd service.\n  Check: systemctl --user status beecork' : ''}
     `);
@@ -678,7 +678,7 @@ const storeCmd = program.command('store').description('Browse and install commun
 
 storeCmd
   .command('search <query>')
-  .description('Search for beecork packages on npm')
+  .description('Search for beecork-pipe packages on npm')
   .action(async (query: string) => {
     const { storeSearch } = await import('./cli/store.js');
     await storeSearch(query);

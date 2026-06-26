@@ -27,7 +27,7 @@ export function isEnabled(packId: string): boolean {
 /** Enable a capability pack */
 export function enablePack(packId: string, apiKey?: string): void {
   const pack = CAPABILITY_PACKS.find((p) => p.id === packId);
-  if (!pack) throw new Error(`Unknown capability: ${packId}. Use 'beecork capabilities' to list.`);
+  if (!pack) throw new Error(`Unknown capability: ${packId}. Use 'beecork-pipe capabilities' to list.`);
 
   if (pack.requiresApiKey && !apiKey) {
     throw new Error(`${pack.name} requires an API key. Hint: ${pack.apiKeyHint}`);

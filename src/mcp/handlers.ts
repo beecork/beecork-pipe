@@ -504,7 +504,7 @@ export const HANDLERS: Record<string, Handler> = {
       sessionId: exported.sessionId,
       workingDir: exported.workingDir,
       status: exported.status,
-      resumeCommand: `beecork attach ${tabName}`,
+      resumeCommand: `beecork-pipe attach ${tabName}`,
       manualCommand: `cd ${exported.workingDir} && claude --session-id ${exported.sessionId} --resume`,
       recentMessages: exported.recentMessages.map((m) => ({
         role: m.role,
@@ -661,7 +661,7 @@ export const HANDLERS: Record<string, Handler> = {
       const packages = (data.objects || []).filter((o) => o.package.name.startsWith('beecork-'));
       if (packages.length === 0)
         return ok(
-          `No beecork packages found for "${query}". You can create one with: beecork channel create <name> or beecork media create <name>`,
+          `No beecork-pipe packages found for "${query}". You can create one with: beecork-pipe channel create <name> or beecork media create <name>`,
         );
       const lines = packages.map(
         (o) =>

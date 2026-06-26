@@ -120,7 +120,7 @@ class Logger {
 export const logger = new Logger();
 
 // Allow operators to bump verbosity at runtime without recompiling.
-// e.g. `BEECORK_LOG_LEVEL=debug beecork start` surfaces every claude subprocess
+// e.g. `BEECORK_LOG_LEVEL=debug beecork-pipe start` surfaces every claude subprocess
 // stdout/stderr line via the logger.debug calls.
 const envLevel = process.env.BEECORK_LOG_LEVEL?.toLowerCase();
 if (envLevel === 'debug' || envLevel === 'info' || envLevel === 'warn' || envLevel === 'error') {

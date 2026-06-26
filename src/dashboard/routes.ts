@@ -583,9 +583,9 @@ export const ROUTES: RouteEntry[] = [
       const packages = await Promise.all([
         (async () => {
           const p: Record<string, unknown> = {
-            name: 'beecork',
+            name: 'beecork-pipe',
             installed: VERSION,
-            latest: await npmViewLatest('beecork'),
+            latest: await npmViewLatest('beecork-pipe'),
           };
           p.updateAvailable = !!(p.latest && p.installed !== p.latest);
           return p;
@@ -613,7 +613,7 @@ export const ROUTES: RouteEntry[] = [
     test: regexPath(/^\/api\/update\/[^/]+$/),
     handler: async ({ res, path }) => {
       const pkgName = decodeURIComponent(path.split('/')[3]);
-      const allowedPackages = new Set(['beecork', '@anthropic-ai/claude-code']);
+      const allowedPackages = new Set(['beecork-pipe', '@anthropic-ai/claude-code']);
       if (!allowedPackages.has(pkgName)) {
         json(res, { error: `Package "${pkgName}" is not in the allowed update list.` }, 400);
         return;

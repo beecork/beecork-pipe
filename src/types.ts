@@ -134,7 +134,7 @@ export interface BeecorkConfig {
   notifications?: NotificationConfig[];
   mediaGenerators?: MediaGeneratorConfig[];
   communityChannels?: string[];
-  /** Capability packs enabled via `beecork capabilities enable`. Owned by src/capabilities. */
+  /** Capability packs enabled via `beecork-pipe capabilities enable`. Owned by src/capabilities. */
   capabilities?: import('./capabilities/types.js').EnabledCapability[];
   deployment: 'local' | 'vps';
 }

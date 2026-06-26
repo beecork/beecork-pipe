@@ -52,7 +52,7 @@ export async function setupWizard(): Promise<void> {
       console.log('    Beecork will remind you at the end.');
       console.log('');
       console.log(
-        '    Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites',
+        '    Guide: https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md#prerequisites',
       );
     }
     console.log('');
@@ -72,7 +72,7 @@ export async function setupWizard(): Promise<void> {
     console.log('  6. BotFather will reply with a token — copy it');
     console.log('');
     console.log(
-      '  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n',
+      '  Detailed guide: https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md\n',
     );
 
     let token = '';
@@ -112,7 +112,7 @@ export async function setupWizard(): Promise<void> {
     console.log('  3. It replies with your user ID (a number like 123456789)');
     console.log('');
     console.log(
-      '  Detailed guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md\n',
+      '  Detailed guide: https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md\n',
     );
 
     const userIdStr = await ask(rl, 'Your Telegram user ID');
@@ -179,7 +179,7 @@ export async function setupWizard(): Promise<void> {
         console.log(`✓ Service installed at ${servicePath}`);
       } catch (err) {
         console.log(`⚠ Service install failed: ${err instanceof Error ? err.message : err}`);
-        console.log('  You can start beecork manually with: beecork start');
+        console.log('  You can start beecork-pipe manually with: beecork-pipe start');
       }
     }
 
@@ -193,36 +193,36 @@ export async function setupWizard(): Promise<void> {
       console.log('     You also need a Claude Pro or Max subscription ($20/month).');
       console.log('     Sign up at: https://claude.ai');
       console.log(
-        '     Guide: https://github.com/beecork/beecork/blob/main/docs/getting-started.md#prerequisites',
+        '     Guide: https://github.com/beecork/beecork-pipe/blob/main/docs/getting-started.md#prerequisites',
       );
       console.log('');
     }
 
     console.log('  Next steps:');
-    console.log('    1. Start the daemon:  beecork start');
+    console.log('    1. Start the daemon:  beecork-pipe start');
     console.log('    2. Send a message to your Telegram bot');
-    console.log('    3. Check status:      beecork status');
+    console.log('    3. Check status:      beecork-pipe status');
     console.log('');
     console.log('  Useful commands:');
-    console.log('    beecork doctor     — check if everything is working');
-    console.log('    beecork dashboard  — open web control panel');
-    console.log('    beecork quickstart — full getting-started checklist');
+    console.log('    beecork-pipe doctor     — check if everything is working');
+    console.log('    beecork-pipe dashboard  — open web control panel');
+    console.log('    beecork-pipe quickstart — full getting-started checklist');
     console.log('');
 
     console.log('  Add more channels:');
-    console.log('    beecork whatsapp           — connect WhatsApp');
-    console.log('    beecork discord            — connect Discord');
-    console.log('    beecork webhook            — enable webhook API');
+    console.log('    beecork-pipe whatsapp           — connect WhatsApp');
+    console.log('    beecork-pipe discord            — connect Discord');
+    console.log('    beecork-pipe webhook            — enable webhook API');
     console.log('');
     console.log('  Add more features:');
     console.log('    beecork media setup        — image, video, audio generation');
-    console.log('    beecork enable github      — repos, PRs, issues');
-    console.log('    beecork enable notion      — pages, databases, notes');
-    console.log('    beecork computer-use enable — mouse, keyboard, screen control');
+    console.log('    beecork-pipe enable github      — repos, PRs, issues');
+    console.log('    beecork-pipe enable notion      — pages, databases, notes');
+    console.log('    beecork-pipe computer-use enable — mouse, keyboard, screen control');
     console.log('');
 
     console.log(
-      '  Need help? https://github.com/beecork/beecork/blob/main/docs/troubleshooting.md\n',
+      '  Need help? https://github.com/beecork/beecork-pipe/blob/main/docs/troubleshooting.md\n',
     );
   } finally {
     rl.close();

@@ -13,7 +13,7 @@ export function installWindowsService(binPath: string): void {
   // Ensure log directory exists
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
 
-  // Create a wrapper script that runs beecork daemon
+  // Create a wrapper script that runs beecork-pipe daemon
   const wrapperPath = path.join(appData, '.beecork-pipe', 'start-daemon.bat');
   fs.writeFileSync(wrapperPath, `@echo off\r\n"${binPath}" daemon >> "${logPath}" 2>&1\r\n`);
 
@@ -37,7 +37,7 @@ export function startWindowsService(): void {
     execSync(`schtasks /Run /TN "${TASK_NAME}"`, { stdio: 'inherit' });
     console.log('Beecork daemon started.');
   } catch {
-    console.error('Failed to start. Run manually: beecork daemon');
+    console.error('Failed to start. Run manually: beecork-pipe daemon');
   }
 }
 
