@@ -54,7 +54,7 @@ export function channelCreate(name: string): void {
         },
         keywords: ['beecork', 'beecork-channel', name],
         peerDependencies: {
-          beecork: '>=0.4.0',
+          'beecork-pipe': '>=1.7.0',
         },
         devDependencies: {
           typescript: '^5.7.0',
@@ -95,8 +95,8 @@ export function channelCreate(name: string): void {
     `// ${pkgName} — Beecork channel implementation
 // See: https://github.com/beecork/beecork-pipe for Channel interface docs
 
-// Import the Channel interface type from beecork
-// Note: beecork is a peer dependency
+// Import the Channel interface type from beecork-pipe
+// Note: beecork-pipe is a peer dependency
 interface Channel {
   readonly id: string;
   readonly name: string;

@@ -128,7 +128,7 @@ export async function mediaList(): Promise<void> {
   const config = getConfig();
   const generators = config.mediaGenerators || [];
   if (generators.length === 0) {
-    console.log('No media generators configured. Run: beecork media');
+    console.log('No media generators configured. Run: beecork-pipe media');
     return;
   }
   console.log(`\n${generators.length} media provider(s):\n`);

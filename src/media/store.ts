@@ -58,7 +58,7 @@ export function getMediaDir(): string {
 }
 
 /**
- * Resolve a file path and confirm it lives inside the beecork media directory.
+ * Resolve a file path and confirm it lives inside the beecork-pipe media directory.
  * Throws otherwise. Used at trust boundaries (MCP tools, voice transcription)
  * where a caller could otherwise hand us an arbitrary path to read or upload.
  * Returns the resolved (absolute) path on success.
@@ -67,7 +67,7 @@ export function assertInsideMediaDir(filePath: string): string {
   const resolved = path.resolve(filePath);
   const root = path.resolve(MEDIA_DIR) + path.sep;
   if (!resolved.startsWith(root)) {
-    throw new Error(`filePath must be inside the beecork media directory (${MEDIA_DIR})`);
+    throw new Error(`filePath must be inside the beecork-pipe media directory (${MEDIA_DIR})`);
   }
   return resolved;
 }

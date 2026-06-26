@@ -605,7 +605,7 @@ mediaCmd
     await mediaList();
   });
 
-// Also make `beecork media` (no subcommand) run setup
+// Also make `beecork-pipe media` (no subcommand) run setup
 mediaCmd.action(async () => {
   const { mediaSetup } = await import('./cli/media.js');
   await mediaSetup();

@@ -215,7 +215,7 @@ export async function setupWizard(): Promise<void> {
     console.log('    beecork-pipe webhook            — enable webhook API');
     console.log('');
     console.log('  Add more features:');
-    console.log('    beecork media setup        — image, video, audio generation');
+    console.log('    beecork-pipe media setup        — image, video, audio generation');
     console.log('    beecork-pipe enable github      — repos, PRs, issues');
     console.log('    beecork-pipe enable notion      — pages, databases, notes');
     console.log('    beecork-pipe computer-use enable — mouse, keyboard, screen control');
@@ -256,7 +256,7 @@ function generateMcpConfig(): void {
 
   const mcpConfig = {
     mcpServers: {
-      beecork: {
+      'beecork-pipe': {
         command: serverCommand,
         args: serverArgs,
         env: {

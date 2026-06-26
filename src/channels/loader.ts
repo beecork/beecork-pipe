@@ -23,9 +23,9 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
     // Global npm modules path varies by OS — try common locations
   ];
 
-  // Also check if beecork is installed globally
+  // Also check if beecork-pipe is installed globally
   try {
-    const globalPath = path.dirname(require.resolve('beecork/package.json'));
+    const globalPath = path.dirname(require.resolve('beecork-pipe/package.json'));
     const globalNodeModules = path.join(globalPath, '..');
     if (fs.existsSync(globalNodeModules)) {
       searchPaths.push(globalNodeModules);

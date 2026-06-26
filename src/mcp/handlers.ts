@@ -62,7 +62,7 @@ async function handleMediaGeneration(
   const gen = provider
     ? generators.find((g) => g.id === provider)
     : generators.find((g) => g.supportedTypes.includes(mediaType));
-  if (!gen) return fail(`No ${mediaType} generator configured. Run: beecork media`);
+  if (!gen) return fail(`No ${mediaType} generator configured. Run: beecork-pipe media`);
   try {
     const result = await gen.generate(mediaType, prompt, { style, duration });
     PendingMessageStore.enqueueMedia(
@@ -661,7 +661,7 @@ export const HANDLERS: Record<string, Handler> = {
       const packages = (data.objects || []).filter((o) => o.package.name.startsWith('beecork-'));
       if (packages.length === 0)
         return ok(
-          `No beecork-pipe packages found for "${query}". You can create one with: beecork-pipe channel create <name> or beecork media create <name>`,
+          `No beecork-pipe packages found for "${query}". You can create one with: beecork-pipe channel create <name> or beecork-pipe media create <name>`,
         );
       const lines = packages.map(
         (o) =>
