@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Beecork postinstall hook.
 //
-// Runs after `npm install -g beecork[@<version>]`. Goal: if a beecork daemon
+// Runs after `npm install -g beecork-pipe[@<version>]`. Goal: if a beecork-pipe daemon
 // is already managed by the OS (launchd plist on mac, systemd unit on linux)
 // from a DIFFERENT install path than this freshly-installed one, rewrite the
 // unit file to point at this install and signal the daemon to restart so the

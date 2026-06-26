@@ -14,7 +14,7 @@ import { getRuntimeInfoPath } from './paths.js';
 export interface RuntimeInfo {
   pid: number;
   version: string;
-  /** The package root: <prefix>/lib/node_modules/beecork. Single canonical key. */
+  /** The package root: <prefix>/lib/node_modules/beecork-pipe. Single canonical key. */
   installRoot: string;
   /** Absolute path to dist/daemon.js — derived from installRoot. */
   daemonScript: string;
