@@ -28,7 +28,6 @@ npm run lint         # ESLint checks
 - `src/` — TypeScript source
 - `dist/` — Compiled JS output (do not edit directly)
 - `tests/unit/` — Vitest unit tests
-- `templates/` — Templates injected during `beecork setup`
 
 ## Making Changes
 

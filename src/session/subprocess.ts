@@ -99,20 +99,29 @@ export class ClaudeSubprocess {
 
       for (const line of lines) {
         if (!line.trim()) continue;
+        let event: StreamEvent;
         try {
-          const event: StreamEvent = JSON.parse(line);
-          // First real event proves claude initialized and the socket is alive
-          // — the startup-stall window is over, so disarm the watchdog for good.
-          // It never re-arms, so legitimate multi-minute tool runs (which emit
-          // nothing on stdout until the tool returns) are never killed.
-          if (this.startupTimer) {
-            clearTimeout(this.startupTimer);
-            this.startupTimer = null;
-          }
-          callbacks.onEvent(event);
+          event = JSON.parse(line);
         } catch {
           // Non-JSON line (verbose debug output), skip
           logger.debug(`[${this.tabName}] non-json: ${line.slice(0, 200)}`);
+          continue;
+        }
+        // First real event proves claude initialized and the socket is alive
+        // — the startup-stall window is over, so disarm the watchdog for good.
+        // It never re-arms, so legitimate multi-minute tool runs (which emit
+        // nothing on stdout until the tool returns) are never killed.
+        if (this.startupTimer) {
+          clearTimeout(this.startupTimer);
+          this.startupTimer = null;
+        }
+        // A throw in onEvent (e.g. a DB write) must not escape into the stream
+        // 'data' listener, where it would become an uncaughtException and take
+        // down the whole daemon.
+        try {
+          callbacks.onEvent(event);
+        } catch (err) {
+          logger.error(`[${this.tabName}] onEvent handler threw:`, err);
         }
       }
     });
@@ -138,7 +147,13 @@ export class ClaudeSubprocess {
         clearTimeout(this.startupTimer);
         this.startupTimer = null;
       }
-      callbacks.onError(err);
+      // Guard against a throw inside onError escaping into the 'error' listener
+      // (→ uncaughtException → daemon shutdown).
+      try {
+        callbacks.onError(err);
+      } catch (cbErr) {
+        logger.error(`[${this.tabName}] onError handler threw:`, cbErr);
+      }
     });
 
     this.proc.on('exit', (code) => {
@@ -156,7 +171,15 @@ export class ClaudeSubprocess {
         this.startupTimer = null;
       }
       logger.info(`[${this.tabName}] Claude subprocess exited (code: ${code})`);
-      callbacks.onExit(code);
+      // onExit inserts the assistant message row. If the tab was deleted mid-run
+      // (/close, MCP beecork_close_tab), that INSERT throws a FK violation; a
+      // throw here would escape the 'exit' listener → uncaughtException → the
+      // whole daemon shuts down. Contain it to this tab.
+      try {
+        callbacks.onExit(code);
+      } catch (cbErr) {
+        logger.error(`[${this.tabName}] onExit handler threw:`, cbErr);
+      }
     });
 
     // Hard runtime cap so a wedged claude can't pin a tab forever.

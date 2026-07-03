@@ -15,9 +15,14 @@ export class RateLimiter {
     private windowMs: number = 60000,
   ) {}
 
-  /** Returns true if the request is allowed */
-  check(key: string): boolean {
+  /**
+   * Returns true if the request is allowed. `perKeyLimitOverride` lets a caller
+   * apply a config-driven per-key limit (e.g. a group's maxResponsesPerMinute)
+   * instead of the limiter's constructed default.
+   */
+  check(key: string, perKeyLimitOverride?: number): boolean {
     const now = Date.now();
+    const perKeyLimit = perKeyLimitOverride ?? this.perKeyLimit;
 
     // Reset global window
     if (now > this.global.resetAt) {
@@ -42,8 +47,8 @@ export class RateLimiter {
       keyWindow = { count: 0, resetAt: now + this.windowMs };
       this.perKey.set(key, keyWindow);
     }
-    if (keyWindow.count >= this.perKeyLimit) {
-      logger.warn(`Rate limit: channel ${key} limit reached (${this.perKeyLimit}/min)`);
+    if (keyWindow.count >= perKeyLimit) {
+      logger.warn(`Rate limit: channel ${key} limit reached (${perKeyLimit}/min)`);
       return false;
     }
 

@@ -1,7 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createRequire } from 'node:module';
 import { logger } from '../util/logger.js';
 import type { Channel, ChannelContext } from './types.js';
+
+// `require` does not exist in ESM; a bare reference throws ReferenceError. Build
+// a require bound to this module so require.resolve works.
+const nodeRequire = createRequire(import.meta.url);
 
 const CHANNEL_PREFIX = 'beecork-channel-';
 
@@ -25,12 +30,17 @@ export async function loadCommunityChannels(ctx: ChannelContext): Promise<Channe
 
   // Also check if beecork-pipe is installed globally
   try {
-    const globalPath = path.dirname(require.resolve('beecork-pipe/package.json'));
+    const globalPath = path.dirname(nodeRequire.resolve('beecork-pipe/package.json'));
     const globalNodeModules = path.join(globalPath, '..');
     if (fs.existsSync(globalNodeModules)) {
       searchPaths.push(globalNodeModules);
     }
-  } catch {}
+  } catch (err) {
+    // Normal when running from a local (non-global) install — debug only.
+    logger.debug(
+      `Could not resolve global beecork-pipe install: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   for (const searchPath of searchPaths) {
     if (!fs.existsSync(searchPath)) continue;

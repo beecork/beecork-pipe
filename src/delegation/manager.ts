@@ -84,16 +84,18 @@ export function createDelegation(
   return delegation;
 }
 
-/** Complete a delegation with a result */
-export function completeDelegation(targetTab: string, result: string): Delegation | null {
+/**
+ * Complete a specific delegation by id with a result. The id is threaded from
+ * the delegated run (pending_messages.ref_id → sendMessage → executeMessage), so
+ * only the run that actually fulfilled the delegation completes it — an
+ * unrelated message finishing on the target tab no longer steals the result.
+ */
+export function completeDelegation(delegationId: string, result: string): Delegation | null {
   const db = getDb();
 
-  // Find the most recent pending/running delegation to this tab
   const row = db
-    .prepare(
-      "SELECT * FROM delegations WHERE target_tab = ? AND status IN ('pending', 'running') ORDER BY created_at DESC LIMIT 1",
-    )
-    .get(targetTab) as DelegationRow | undefined;
+    .prepare("SELECT * FROM delegations WHERE id = ? AND status IN ('pending', 'running')")
+    .get(delegationId) as DelegationRow | undefined;
 
   if (!row) return null;
 
@@ -138,13 +140,20 @@ export function getPendingDelegations(tabName?: string): Delegation[] {
   }));
 }
 
-/** Get current delegation depth for a tab */
+/**
+ * Get current delegation depth for a tab. Counts delegations where the tab is
+ * the source OR the target of an open delegation: in a chain A→B→C, the A→B row
+ * (target_tab=B) makes B's depth reflect its inbound delegation, so a chain
+ * actually accumulates depth and hits MAX_DELEGATION_DEPTH. Counting only
+ * source_tab (the old behavior) kept every hop at depth 1, making the limit
+ * inert against runaway chains and ping-pong loops.
+ */
 function getCurrentDepth(tabName: string): number {
   const db = getDb();
   const row = db
     .prepare(
-      "SELECT MAX(depth) as d FROM delegations WHERE source_tab = ? AND status IN ('pending', 'running')",
+      "SELECT MAX(depth) as d FROM delegations WHERE (source_tab = ? OR target_tab = ?) AND status IN ('pending', 'running')",
     )
-    .get(tabName) as { d: number | null };
+    .get(tabName, tabName) as { d: number | null };
   return row.d ?? 0;
 }

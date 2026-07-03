@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { CronExpressionParser } from 'cron-parser';
 import { WatcherStore } from './store.js';
 import { evaluateWatcher } from './evaluator.js';
 import { execAsync, intervalToMs } from '../tasks/scheduler.js';
@@ -30,20 +31,27 @@ export class WatcherScheduler {
       if (!watcher.enabled) continue;
 
       const ms = parseScheduleToMs(watcher.schedule);
-      if (!ms) {
-        logger.error(`Watcher: invalid schedule for "${watcher.name}": ${watcher.schedule}`);
-        continue;
+      let due: number | null;
+      if (ms !== null) {
+        // Interval schedule: if we have a lastCheckAt, fire `intervalMs` after it
+        // (catches up overdue checks after sleep/restart on the next tick).
+        // Otherwise wait `intervalMs` before the first fire.
+        if (watcher.lastCheckAt) {
+          const last = new Date(watcher.lastCheckAt).getTime();
+          due = Number.isFinite(last) ? last + ms : Date.now() + ms;
+        } else {
+          due = Date.now() + ms;
+        }
+      } else {
+        // Cron schedule: next fire from now. watch_create accepts cron
+        // expressions, so the scheduler must honor them — previously cron
+        // watchers failed parseScheduleToMs and were silently never scheduled.
+        due = nextCronFire(watcher.schedule, Date.now());
       }
 
-      // Seed nextCheckAt: if we have a lastCheckAt, fire `intervalMs` after it
-      // (catches up overdue checks after sleep/restart on the next tick).
-      // Otherwise wait `intervalMs` before first fire — matches today's setInterval semantics.
-      let due: number;
-      if (watcher.lastCheckAt) {
-        const last = new Date(watcher.lastCheckAt).getTime();
-        due = Number.isFinite(last) ? last + ms : Date.now() + ms;
-      } else {
-        due = Date.now() + ms;
+      if (due === null) {
+        logger.error(`Watcher: invalid schedule for "${watcher.name}": ${watcher.schedule}`);
+        continue;
       }
 
       this.nextCheckAt.set(watcher.id, due);
@@ -89,13 +97,14 @@ export class WatcherScheduler {
       }
 
       const intervalMs = parseScheduleToMs(watcher.schedule);
-      if (!intervalMs) {
+      const nextDue = intervalMs !== null ? now + intervalMs : nextCronFire(watcher.schedule, now);
+      if (nextDue === null) {
         this.nextCheckAt.delete(id);
         continue;
       }
 
       // Advance BEFORE running — eliminates double-fire race
-      this.nextCheckAt.set(id, now + intervalMs);
+      this.nextCheckAt.set(id, nextDue);
 
       this.running.add(id);
       void this.runCheck(watcher).finally(() => this.running.delete(id));
@@ -182,7 +191,10 @@ export class WatcherScheduler {
               message = watcher.actionDetails.slice(colonIdx + 1).trim();
             }
             const fullMessage = `[Watcher "${watcher.name}" triggered] ${message}\n\nWatcher output:\n${output.slice(0, 500)}`;
-            PendingMessageStore.enqueueDelegation(tabName, fullMessage, db);
+            // This just injects a prompt into a tab — there's no delegations-table
+            // row or return-result, so it's a plain user message (a real
+            // delegation carries a delegation id for completion correlation).
+            PendingMessageStore.enqueueUser(tabName, fullMessage, db);
             if (this.onNotify) {
               await this.onNotify(
                 `Watcher "${watcher.name}" triggered -- delegated to tab:${tabName}`,
@@ -202,4 +214,15 @@ function parseScheduleToMs(schedule: string): number | null {
   // Strip "every " prefix if present
   const raw = schedule.replace(/^every\s+/i, '');
   return intervalToMs(raw);
+}
+
+/** Next fire time (epoch ms) for a cron-expression watcher schedule, or null if not valid cron. */
+function nextCronFire(schedule: string, fromMs: number): number | null {
+  try {
+    return CronExpressionParser.parse(schedule, { currentDate: new Date(fromMs) })
+      .next()
+      .getTime();
+  } catch {
+    return null;
+  }
 }

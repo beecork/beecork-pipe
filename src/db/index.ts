@@ -7,7 +7,9 @@ import { runMigrations } from './migrations.js';
 import { openDb } from './connection.js';
 import { logger } from '../util/logger.js';
 
-const SCHEMA = `
+/** Base schema (the original v1 table shapes). Later columns/tables live in
+ *  migrations — build a real schema in tests with `db.exec(SCHEMA); runMigrations(db)`. */
+export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tabs (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
@@ -123,7 +125,13 @@ export interface CreateTabOptions {
   systemPrompt?: string | null;
 }
 
-/** Shared tab record creation — used by dashboard, MCP, and TabManager */
+/**
+ * Tab record creation for the dashboard and MCP `beecork_tab_create` paths
+ * (both pass an explicit workingDir that must be validated here).
+ * NOTE: TabManager.ensureTab() does NOT go through this — it has its own insert
+ * with project-path resolution and channel-driven defaults. Keep the two INSERT
+ * column lists in sync if either changes.
+ */
 export function createTabRecord(
   db: Database.Database,
   opts: CreateTabOptions,

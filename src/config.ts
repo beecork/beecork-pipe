@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { getConfigPath, expandHome } from './util/paths.js';
+import { logger } from './util/logger.js';
 import type { BeecorkConfig, TabConfig } from './types.js';
 
 const DEFAULT_TAB_CONFIG: TabConfig = {
@@ -50,8 +51,12 @@ export function getConfig(): BeecorkConfig {
     return cachedConfig;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // Log to stderr since logger may not be initialized yet
-    console.error(`Warning: Failed to parse config file ${configPath}: ${msg} — using defaults`);
+    // A corrupt config silently degrading to defaults means the daemon starts
+    // with every channel dead. Surface it in daemon.log (logger also writes to
+    // stderr, so this still shows during early startup).
+    logger.error(
+      `Failed to parse config file ${configPath}: ${msg} — starting with DEFAULT config (all channels disabled until fixed)`,
+    );
     return { ...DEFAULT_CONFIG };
   }
 }

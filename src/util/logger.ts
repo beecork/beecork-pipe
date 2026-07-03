@@ -24,6 +24,21 @@ function redact(s: string): string {
   return out;
 }
 
+// Serialize one log argument. Error instances need special handling:
+// JSON.stringify(new Error('x')) is '{}' because message/stack are
+// non-enumerable, so `logger.error('failed:', err)` would otherwise drop the
+// entire error. The stack already begins with "Name: message", so it's the
+// fullest single string.
+function formatArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  if (a instanceof Error) return a.stack ?? `${a.name}: ${a.message}`;
+  try {
+    return JSON.stringify(a);
+  } catch {
+    return String(a);
+  }
+}
+
 const ROTATE_BYTES = 10 * 1024 * 1024;
 
 class Logger {
@@ -57,7 +72,7 @@ class Logger {
     const prefix = `[${timestamp}] [${level.toUpperCase()}]`;
     const raw =
       args.length > 0
-        ? `${prefix} ${msg} ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`
+        ? `${prefix} ${msg} ${args.map(formatArg).join(' ')}`
         : `${prefix} ${msg}`;
     const line = redact(raw);
 

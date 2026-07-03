@@ -80,13 +80,29 @@ describe('intervalToCron', () => {
     expect(intervalToCron('1h')).toBe('0 */1 * * *');
   });
 
-  it('should convert days', () => {
+  it('should convert single-day interval', () => {
     expect(intervalToCron('1d')).toBe('0 0 */1 * *');
-    expect(intervalToCron('7d')).toBe('0 0 */7 * *');
+    // Multi-day intervals do NOT map cleanly to `*/N` day-of-month (it resets
+    // each month), so they fall back to exact intervalToMs scheduling.
+    expect(intervalToCron('7d')).toBeNull();
+    expect(intervalToCron('2d')).toBeNull();
   });
 
-  it('should convert weeks', () => {
+  it('should convert single-week interval', () => {
     expect(intervalToCron('1w')).toBe('0 0 * * 0');
+    // Multi-week does not align to a weekly cron.
+    expect(intervalToCron('2w')).toBeNull();
+  });
+
+  it('should return null for non-divisor minute/hour intervals (M14 — exact spacing via intervalToMs)', () => {
+    // 45m as `*/45` would fire at :00 and :45 (45 then 15 min gap), not every 45m.
+    expect(intervalToCron('45m')).toBeNull();
+    expect(intervalToCron('7m')).toBeNull();
+    // 5h as `0 */5` would fire at 0,5,10,15,20 then wrap (4h gap), not every 5h.
+    expect(intervalToCron('5h')).toBeNull();
+    // Divisor intervals still align cleanly.
+    expect(intervalToCron('15m')).toBe('*/15 * * * *');
+    expect(intervalToCron('6h')).toBe('0 */6 * * *');
   });
 
   it('should return null for combined intervals (handled by intervalToMs fallback)', () => {

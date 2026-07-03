@@ -26,9 +26,15 @@ export type NotifyFn = ((text: string) => Promise<void>) | null;
 
 const POLL_LIMIT = 50;
 const CLEANUP_EVERY_N_TICKS = 100;
+// Cap concurrent in-flight dispatches so a claim burst or a wake-from-sleep
+// catch-up (many overdue rows at once) can't spawn dozens of `claude`
+// subprocesses simultaneously. Excess rows stay 'pending' and are claimed on
+// later ticks as capacity frees up.
+const MAX_CONCURRENT_DISPATCH = 8;
 
 export class PendingMessageDispatcher {
   private pollCount = 0;
+  private inFlight = 0;
 
   constructor(
     private tabManager: TabManager,
@@ -49,14 +55,25 @@ export class PendingMessageDispatcher {
       db.prepare(
         "DELETE FROM pending_messages WHERE (status = 'done' OR status = 'failed') AND created_at < datetime('now', '-1 day')",
       ).run();
+      // Periodically re-run stuck-row recovery (not only at startup) so a row
+      // claimed just before a crash doesn't wait for the next daemon restart.
+      PendingMessageStore.recoverProcessing(db);
     }
 
-    const claimed = PendingMessageStore.claimBatch(POLL_LIMIT, db);
+    // Only claim as many as we have spare capacity for — a claimed row is marked
+    // 'processing', so we must not claim more than we can dispatch this tick.
+    const capacity = MAX_CONCURRENT_DISPATCH - this.inFlight;
+    if (capacity <= 0) return;
+
+    const claimed = PendingMessageStore.claimBatch(Math.min(POLL_LIMIT, capacity), db);
     for (const row of claimed) {
       // Fire-and-forget per row — the row is already marked 'processing' so
       // the next tick won't double-dispatch. The .finally() handles the
       // terminal transition.
-      void this.dispatch(row);
+      this.inFlight++;
+      void this.dispatch(row).finally(() => {
+        this.inFlight--;
+      });
     }
   }
 
@@ -84,7 +101,14 @@ export class PendingMessageDispatcher {
             logger.warn(`Pending row ${row.id} (type=${row.type}) has no tab_name, skipping`);
             break;
           }
-          await this.tabManager.sendMessage(row.tabName, row.message);
+          // For a delegation dispatch, carry the delegation id so that when this
+          // run completes it closes THAT delegation (not "newest pending to this
+          // tab"). refId is null for every other type.
+          await this.tabManager.sendMessage(
+            row.tabName,
+            row.message,
+            row.type === 'delegation' && row.refId ? { delegationId: row.refId } : undefined,
+          );
           break;
         }
         default: {

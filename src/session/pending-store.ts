@@ -38,6 +38,8 @@ export interface PendingRow {
   type: PendingMessageType;
   status: 'pending' | 'processing' | 'done' | 'failed';
   createdAt: string;
+  /** Correlation id — set for delegation rows so the completing run closes the right delegation. */
+  refId: string | null;
 }
 
 interface MediaPayload {
@@ -53,6 +55,7 @@ interface RawPendingRow {
   type: string | null;
   status: string | null;
   created_at: string;
+  ref_id: string | null;
 }
 
 function rowToPending(r: RawPendingRow): PendingRow {
@@ -63,10 +66,14 @@ function rowToPending(r: RawPendingRow): PendingRow {
     type: (r.type as PendingMessageType) || 'user',
     status: (r.status as PendingRow['status']) || 'pending',
     createdAt: r.created_at,
+    refId: r.ref_id,
   };
 }
 
-const STALE_PROCESSING_MS = 30 * 60 * 1000; // 30 minutes
+// Recover rows stuck in 'processing' after this long. Keyed off claimed_at, so
+// it must sit safely ABOVE the 30-minute subprocess maxRuntime cap — a run that
+// legitimately takes ~30 min must not be reset and re-dispatched mid-flight.
+const STALE_PROCESSING_MS = 45 * 60 * 1000; // 45 minutes
 
 // Private INSERT helper — all five enqueue* methods were the same INSERT with
 // different literals. Notification rows use '' for tab_name since the consumer
@@ -76,10 +83,11 @@ function insertPending(
   tabName: string,
   message: string,
   type: PendingMessageType,
+  refId: string | null = null,
 ): void {
   db.prepare(
-    'INSERT INTO pending_messages (tab_name, message, type, status) VALUES (?, ?, ?, ?)',
-  ).run(tabName, message, type, 'pending');
+    'INSERT INTO pending_messages (tab_name, message, type, status, ref_id) VALUES (?, ?, ?, ?, ?)',
+  ).run(tabName, message, type, 'pending', refId);
 }
 
 export const PendingMessageStore = {
@@ -95,8 +103,13 @@ export const PendingMessageStore = {
     insertPending(db, tabName, JSON.stringify(payload), 'media');
   },
 
-  enqueueDelegation(tabName: string, message: string, db: Database.Database = getDb()): void {
-    insertPending(db, tabName, message, 'delegation');
+  enqueueDelegation(
+    tabName: string,
+    message: string,
+    delegationId: string,
+    db: Database.Database = getDb(),
+  ): void {
+    insertPending(db, tabName, message, 'delegation', delegationId);
   },
 
   enqueueDelegationResult(tabName: string, message: string, db: Database.Database = getDb()): void {
@@ -116,12 +129,12 @@ export const PendingMessageStore = {
     const claim = db.transaction((max: number): PendingRow[] => {
       const rows = db
         .prepare(
-          "SELECT id, tab_name, message, type, status, created_at FROM pending_messages WHERE status = 'pending' ORDER BY created_at ASC LIMIT ?",
+          "SELECT id, tab_name, message, type, status, created_at, ref_id FROM pending_messages WHERE status = 'pending' ORDER BY created_at ASC, id ASC LIMIT ?",
         )
         .all(max) as RawPendingRow[];
       if (rows.length === 0) return [];
       const stmt = db.prepare(
-        "UPDATE pending_messages SET status = 'processing' WHERE id = ? AND status = 'pending'",
+        "UPDATE pending_messages SET status = 'processing', claimed_at = datetime('now') WHERE id = ? AND status = 'pending'",
       );
       const claimed: PendingRow[] = [];
       for (const r of rows) {
@@ -145,15 +158,18 @@ export const PendingMessageStore = {
   },
 
   /**
-   * Reset stuck `processing` rows back to `pending`. Run at daemon startup so
-   * a crash mid-dispatch doesn't leave rows permanently in-flight. The 30min
-   * window is well beyond the 30min subprocess runtime cap.
+   * Reset stuck `processing` rows back to `pending`. Run at daemon startup AND
+   * periodically from the dispatcher, so a crash mid-dispatch doesn't leave a row
+   * stranded until a much later restart. Keyed off `claimed_at` (when the row was
+   * picked up), falling back to `created_at` for rows claimed before the
+   * claimed_at column existed.
    */
   recoverProcessing(db: Database.Database = getDb()): number {
     const result = db
       .prepare(
         `UPDATE pending_messages SET status = 'pending'
-       WHERE status = 'processing' AND created_at < datetime('now', '-' || ? || ' seconds')`,
+       WHERE status = 'processing'
+         AND COALESCE(claimed_at, created_at) < datetime('now', '-' || ? || ' seconds')`,
       )
       .run(Math.floor(STALE_PROCESSING_MS / 1000));
     if (result.changes > 0) {

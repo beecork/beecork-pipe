@@ -1,8 +1,6 @@
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { getConfig, saveConfig } from '../config.js';
-
-const SAFE_NPM_PACKAGE = /^[@a-zA-Z0-9_/.-]+$/;
+import { isSafeNpmPackage, installGlobalNpmPackage } from '../util/npm.js';
 import { getMcpConfigPath } from '../util/paths.js';
 import { logger } from '../util/logger.js';
 import { CAPABILITY_PACKS } from './packs.js';
@@ -34,12 +32,12 @@ export function enablePack(packId: string, apiKey?: string): void {
   }
 
   // Install the MCP server package
-  if (!SAFE_NPM_PACKAGE.test(pack.mcpServer.package)) {
+  if (!isSafeNpmPackage(pack.mcpServer.package)) {
     throw new Error(`Invalid package name in capability pack: ${pack.mcpServer.package}`);
   }
   try {
     console.log(`Installing ${pack.mcpServer.package}...`);
-    execFileSync('npm', ['install', '-g', pack.mcpServer.package], { stdio: 'pipe' });
+    installGlobalNpmPackage(pack.mcpServer.package, 'pipe');
   } catch {
     logger.warn(
       `Package install skipped (may already be available via npx): ${pack.mcpServer.package}`,

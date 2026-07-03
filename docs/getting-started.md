@@ -4,7 +4,7 @@ Beecork makes Claude Code always-on and reachable from your phone via Telegram, 
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 24+
 - Claude Code CLI installed (`npm install -g @anthropic-ai/claude-code`)
 - A Claude Pro or Max subscription (for Claude Code)
 - A Telegram account (for the bot)
@@ -14,7 +14,7 @@ Beecork makes Claude Code always-on and reachable from your phone via Telegram, 
 ### 1. Install Beecork
 
 ```bash
-npm install -g beecork
+npm install -g beecork-pipe
 ```
 
 ### 2. Create a Telegram Bot
@@ -34,7 +34,7 @@ npm install -g beecork
 ### 4. Run Setup
 
 ```bash
-beecork setup
+beecork-pipe setup
 ```
 
 Follow the prompts to enter your bot token and user ID.
@@ -42,7 +42,7 @@ Follow the prompts to enter your bot token and user ID.
 ### 5. Start the Daemon
 
 ```bash
-beecork start
+beecork-pipe start
 ```
 
 ### 6. Send a Message
@@ -53,13 +53,13 @@ Open your Telegram bot and send any message. Beecork will pass it to Claude Code
 
 | Command | What it does |
 |---------|-------------|
-| `beecork status` | Check if daemon is running |
-| `beecork tabs` | List active tabs |
-| `beecork logs` | View daemon logs |
-| `beecork doctor` | Run diagnostics |
-| `beecork dashboard` | Open web dashboard |
-| `beecork tasks list` | View scheduled tasks |
-| `beecork mcp list` | View MCP servers |
+| `beecork-pipe status` | Check if daemon is running |
+| `beecork-pipe tabs` | List active tabs |
+| `beecork-pipe logs` | View daemon logs |
+| `beecork-pipe doctor` | Run diagnostics |
+| `beecork-pipe dashboard` | Open web dashboard |
+| `beecork-pipe tasks list` | View scheduled tasks |
+| `beecork-pipe mcp list` | View MCP servers |
 
 ## Organizing Work with Tabs
 

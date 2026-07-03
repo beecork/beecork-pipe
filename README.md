@@ -24,7 +24,7 @@ Message Claude Code from Telegram at 2am — it wakes up, does the work, message
 - **Virtual tabs** — Persistent Claude Code sessions with context that survives restarts.
 - **Task scheduling** — Tell Claude Code to set up recurring tasks via MCP tools — it wakes up, runs the task, reports back.
 - **Memory** — Cross-session memory so Claude Code never loses context.
-- **MCP server** — 38 tools Claude Code can call to manage tabs, memory, cron jobs, watchers, media, folders, and more.
+- **MCP server** — 37 tools Claude Code can call to manage tabs, memory, scheduled tasks, watchers, media, folders, and more.
 - **Smart routing** — Messages are automatically routed to the right project folder and tab using project-name detection, sticky conversation context, and learned patterns. No API key required.
 - **Background service** — Runs as a launchd (macOS), systemd (Linux), or Task Scheduler (Windows) service. Starts on login, runs silently.
 
@@ -35,7 +35,7 @@ Message Claude Code from Telegram at 2am — it wakes up, does the work, message
 npm install -g beecork-pipe
 
 # Interactive setup (Telegram token, Claude Code path, background service)
-beecork setup
+beecork-pipe setup
 
 # Start
 beecork-pipe start
@@ -50,54 +50,54 @@ See [Getting Started](https://github.com/beecork/beecork-pipe/blob/main/docs/get
 ```bash
 # Core
 beecork-pipe start              # Start the daemon
-beecork stop               # Stop the daemon
-beecork status             # Check if running
-beecork setup              # Set up Beecork (Telegram + system service)
-beecork doctor             # Diagnose common issues
-beecork update             # Update to latest version
-beecork quickstart         # Print getting-started checklist
+beecork-pipe stop               # Stop the daemon
+beecork-pipe status             # Check if running
+beecork-pipe setup              # Set up Beecork (Telegram + system service)
+beecork-pipe doctor             # Diagnose common issues
+beecork-pipe update             # Update to latest version
+beecork-pipe quickstart         # Print getting-started checklist
 
 # Tabs & Messages
-beecork tabs               # List active tabs
-beecork send <msg>         # Send a message to the default tab
-beecork logs               # Tail daemon logs
-beecork export <tab>       # Export tab for terminal handoff
-beecork attach <tab>       # Attach to a running tab
+beecork-pipe tabs               # List active tabs
+beecork-pipe send <msg>         # Send a message to the default tab
+beecork-pipe logs               # Tail daemon logs
+beecork-pipe export <tab>       # Export tab for terminal handoff
+beecork-pipe attach <tab>       # Attach to a running tab
 
 # Scheduling & Watchers
-beecork tasks list         # List scheduled tasks
-beecork tasks delete <id>  # Delete a task
-beecork watches            # List active watchers
-beecork watch delete <id>  # Delete a watcher
+beecork-pipe tasks list         # List scheduled tasks
+beecork-pipe tasks delete <id>  # Delete a task
+beecork-pipe watches            # List active watchers
+beecork-pipe watch delete <id>  # Delete a watcher
 
 # Memory & Knowledge
-beecork memory list        # List stored memories
-beecork memory delete <id> # Delete a memory
-beecork knowledge          # View stored knowledge
+beecork-pipe memory list        # List stored memories
+beecork-pipe memory delete <id> # Delete a memory
+beecork-pipe knowledge          # View stored knowledge
 
 # Channels & Integrations
-beecork discord            # Set up Discord bot
-beecork whatsapp           # Set up WhatsApp
-beecork webhook            # Set up webhook endpoint
-beecork enable <cap>       # Enable a capability (github, notion, database)
-beecork disable <cap>      # Disable a capability
-beecork capabilities       # List available capabilities
+beecork-pipe discord            # Set up Discord bot
+beecork-pipe whatsapp           # Set up WhatsApp
+beecork-pipe webhook            # Set up webhook endpoint
+beecork-pipe enable <cap>       # Enable a capability (github, notion, database)
+beecork-pipe disable <cap>      # Disable a capability
+beecork-pipe capabilities       # List available capabilities
 
 # Tools
-beecork dashboard          # Open the web dashboard
-beecork mcp list           # List MCP server configs
-beecork media setup        # Configure media generators
-beecork activity           # View activity summary
-beecork history            # Show activity timeline
-beecork folders            # List discovered folders
-beecork templates          # List tab templates
-beecork store search <q>   # Search community extensions
-beecork store install <p>  # Install a community package
+beecork-pipe dashboard          # Open the web dashboard
+beecork-pipe mcp list           # List MCP server configs
+beecork-pipe media setup        # Configure media generators
+beecork-pipe activity           # View activity summary
+beecork-pipe history            # Show activity timeline
+beecork-pipe folders            # List discovered folders
+beecork-pipe templates          # List tab templates
+beecork-pipe store search <q>   # Search community extensions
+beecork-pipe store install <p>  # Install a community package
 ```
 
 Tasks, watchers, and memories are created by Claude Code itself via MCP tools — just tell it what you need in natural language. The CLI is for viewing and managing them.
 
-Run `beecork --help` for the full list of commands.
+Run `beecork-pipe --help` for the full list of commands.
 
 ## Deploy Anywhere
 
@@ -142,7 +142,7 @@ Telegram/WhatsApp/Discord/Webhook
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 24+
 - Claude Code CLI (`npm install -g @anthropic-ai/claude-code`)
 - Claude Pro or Max subscription
 - Telegram account (for the bot)

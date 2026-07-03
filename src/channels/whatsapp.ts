@@ -134,175 +134,185 @@ export class WhatsAppChannel implements Channel {
       });
 
       sock.ev.on('messages.upsert', async (m: any) => {
-        const msg = m.messages[0];
-        if (!msg?.message || msg.key.fromMe) return;
+        // 'notify' = freshly received; 'append'/'prepend' = history sync and
+        // 'replace' = edits — replaying those double-processes. An upsert can
+        // also carry several messages, so iterate instead of reading [0].
+        if (m.type !== 'notify') return;
+        for (const msg of m.messages) {
+          // Handle each message in its own scope so the body's early `return`s
+          // mean "skip this message", not "abort the whole batch".
+          await (async () => {
+            if (!msg?.message || msg.key.fromMe) return;
 
-        const sender = msg.key.remoteJid;
-        if (!sender || !this.isAllowed(sender)) return;
+            const sender = msg.key.remoteJid;
+            if (!sender || !this.isAllowed(sender)) return;
 
-        // Rate limit check
-        if (!inboundLimiter.check(this.id)) {
-          await sock
-            .sendMessage(sender, {
-              text: "I'm receiving too many messages right now. Please wait a moment.",
-            })
-            .catch(() => {});
-          return;
-        }
-
-        const text =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          msg.message.imageMessage?.caption ||
-          msg.message.videoMessage?.caption ||
-          '';
-
-        // Download media (in parallel). Descriptor map collapses what used to be
-        // 5 near-identical blocks into one loop. Each descriptor describes how to
-        // extract a MediaAttachment from a specific Baileys variant.
-        type WAMessage = Record<string, any>;
-        interface WADescriptor {
-          key: string;
-          build: (m: WAMessage, buf: Buffer) => MediaAttachment | null;
-        }
-        const descriptors: WADescriptor[] = [
-          {
-            key: 'imageMessage',
-            build: (m, buf) => ({
-              type: 'image',
-              mimeType: m.imageMessage.mimetype || 'image/jpeg',
-              filePath: saveMedia(buf, 'jpg'),
-            }),
-          },
-          {
-            key: 'audioMessage',
-            build: (m, buf) => {
-              const ext = m.audioMessage.ptt ? 'ogg' : 'mp3';
-              return {
-                type: m.audioMessage.ptt ? 'voice' : 'audio',
-                mimeType: m.audioMessage.mimetype || 'audio/ogg',
-                filePath: saveMedia(buf, ext),
-                duration: m.audioMessage.seconds ?? undefined,
-              };
-            },
-          },
-          {
-            key: 'documentMessage',
-            build: (m, buf) => {
-              const ext = m.documentMessage.fileName?.split('.').pop() || 'bin';
-              return {
-                type: 'document',
-                mimeType: m.documentMessage.mimetype || 'application/octet-stream',
-                filePath: saveMedia(buf, ext, m.documentMessage.fileName ?? undefined),
-                fileName: m.documentMessage.fileName ?? undefined,
-              };
-            },
-          },
-          {
-            key: 'videoMessage',
-            build: (m, buf) => ({
-              type: 'video',
-              mimeType: m.videoMessage.mimetype || 'video/mp4',
-              filePath: saveMedia(buf, 'mp4'),
-              duration: m.videoMessage.seconds ?? undefined,
-            }),
-          },
-        ];
-        const waDownloadTasks: Array<Promise<MediaAttachment | null>> = [];
-        for (const d of descriptors) {
-          if (!msg.message[d.key]) continue;
-          waDownloadTasks.push(
-            downloadMediaMessage(msg, 'buffer', {})
-              .then((buffer: any) => {
-                if (!buffer || isOversized(buffer.length)) return null;
-                try {
-                  return d.build(msg.message, buffer as Buffer);
-                } catch {
-                  return null;
-                }
-              })
-              .catch(() => null),
-          );
-        }
-        const waResults = await Promise.allSettled(waDownloadTasks);
-        const media: MediaAttachment[] = waResults
-          .filter(
-            (r): r is PromiseFulfilledResult<MediaAttachment | null> =>
-              r.status === 'fulfilled' && r.value !== null,
-          )
-          .map((r) => r.value!);
-
-        // Transcribe voice messages if STT is configured
-        await this.voice.transcribe(media);
-
-        if (!text && media.length === 0) return;
-
-        try {
-          const waUserId = sender.replace('@s.whatsapp.net', '');
-
-          // Shared command handler (covers /tabs, /stop, /projects, /project, /newproject, /close, /fresh, etc.)
-          if (text.startsWith('/')) {
-            const { handleSharedCommand } = await import('./command-handler.js');
-            const cmdResult = await handleSharedCommand(
-              {
-                userId: waUserId,
-                text,
-                isAdmin: isChannelAdmin(
-                  this.allowedNumbers,
-                  waUserId,
-                  this.ctx.config.whatsapp?.adminNumber,
-                ),
-                channelId: 'whatsapp',
-              },
-              this.ctx.tabManager,
-            );
-            if (cmdResult.handled) {
-              if (cmdResult.response) await sock.sendMessage(sender, { text: cmdResult.response });
+            // Rate limit check
+            if (!inboundLimiter.check(this.id)) {
+              await sock
+                .sendMessage(sender, {
+                  text: "I'm receiving too many messages right now. Please wait a moment.",
+                })
+                .catch(() => {});
               return;
             }
-          }
 
-          await sock.sendPresenceUpdate('composing', sender).catch(() => {});
+            const text =
+              msg.message.conversation ||
+              msg.message.extendedTextMessage?.text ||
+              msg.message.imageMessage?.caption ||
+              msg.message.videoMessage?.caption ||
+              '';
 
-          // Shared message pipeline
-          const pipelineResult = await processInboundMessage({
-            text,
-            media,
-            channelId: 'whatsapp',
-            tabManager: this.ctx.tabManager,
-            voiceReplyMode: this.ctx.config.voice?.replyMode,
-            ttsProvider: this.voice.tts,
-            userId: waUserId,
-            sendProgress: (msg) => {
-              sock.sendMessage(sender, { text: msg }).catch(() => {});
-            },
-          });
+            // Download media (in parallel). Descriptor map collapses what used to be
+            // 5 near-identical blocks into one loop. Each descriptor describes how to
+            // extract a MediaAttachment from a specific Baileys variant.
+            type WAMessage = Record<string, any>;
+            interface WADescriptor {
+              key: string;
+              build: (m: WAMessage, buf: Buffer) => MediaAttachment | null;
+            }
+            const descriptors: WADescriptor[] = [
+              {
+                key: 'imageMessage',
+                build: (m, buf) => ({
+                  type: 'image',
+                  mimeType: m.imageMessage.mimetype || 'image/jpeg',
+                  filePath: saveMedia(buf, 'jpg'),
+                }),
+              },
+              {
+                key: 'audioMessage',
+                build: (m, buf) => {
+                  const ext = m.audioMessage.ptt ? 'ogg' : 'mp3';
+                  return {
+                    type: m.audioMessage.ptt ? 'voice' : 'audio',
+                    mimeType: m.audioMessage.mimetype || 'audio/ogg',
+                    filePath: saveMedia(buf, ext),
+                    duration: m.audioMessage.seconds ?? undefined,
+                  };
+                },
+              },
+              {
+                key: 'documentMessage',
+                build: (m, buf) => {
+                  const ext = m.documentMessage.fileName?.split('.').pop() || 'bin';
+                  return {
+                    type: 'document',
+                    mimeType: m.documentMessage.mimetype || 'application/octet-stream',
+                    filePath: saveMedia(buf, ext, m.documentMessage.fileName ?? undefined),
+                    fileName: m.documentMessage.fileName ?? undefined,
+                  };
+                },
+              },
+              {
+                key: 'videoMessage',
+                build: (m, buf) => ({
+                  type: 'video',
+                  mimeType: m.videoMessage.mimetype || 'video/mp4',
+                  filePath: saveMedia(buf, 'mp4'),
+                  duration: m.videoMessage.seconds ?? undefined,
+                }),
+              },
+            ];
+            const waDownloadTasks: Array<Promise<MediaAttachment | null>> = [];
+            for (const d of descriptors) {
+              if (!msg.message[d.key]) continue;
+              waDownloadTasks.push(
+                downloadMediaMessage(msg, 'buffer', {})
+                  .then((buffer: any) => {
+                    if (!buffer || isOversized(buffer.length)) return null;
+                    try {
+                      return d.build(msg.message, buffer as Buffer);
+                    } catch {
+                      return null;
+                    }
+                  })
+                  .catch(() => null),
+              );
+            }
+            const waResults = await Promise.allSettled(waDownloadTasks);
+            const media: MediaAttachment[] = waResults
+              .filter(
+                (r): r is PromiseFulfilledResult<MediaAttachment | null> =>
+                  r.status === 'fulfilled' && r.value !== null,
+              )
+              .map((r) => r.value!);
 
-          await sock.sendPresenceUpdate('paused', sender).catch(() => {});
+            // Transcribe voice messages if STT is configured
+            await this.voice.transcribe(media);
 
-          // Empty result means no prompt and no media
-          if (!pipelineResult.responseText) return;
+            if (!text && media.length === 0) return;
 
-          // Send voice reply if TTS generated audio
-          if (pipelineResult.audioPath) {
-            await sock.sendMessage(sender, {
-              audio: { url: pipelineResult.audioPath },
-              mimetype: 'audio/ogg; codecs=opus',
-              ptt: true,
-            });
-            if (pipelineResult.voiceOnly) return;
-          }
+            try {
+              const waUserId = sender.replace('@s.whatsapp.net', '');
 
-          await this.sendResponse(sender, pipelineResult.responseText, pipelineResult.tabName);
-        } catch (err) {
-          logger.error('WhatsApp message handler error:', err);
-          await sock
-            .sendMessage(sender, {
-              text: 'Something went wrong processing your message. Check daemon logs for details.',
-            })
-            .catch((sendErr: unknown) =>
-              logger.error('WhatsApp: failed to send fallback error message:', sendErr),
-            );
+              // Shared command handler (covers /tabs, /stop, /projects, /project, /newproject, /close, /fresh, etc.)
+              if (text.startsWith('/')) {
+                const { handleSharedCommand } = await import('./command-handler.js');
+                const cmdResult = await handleSharedCommand(
+                  {
+                    userId: waUserId,
+                    text,
+                    isAdmin: isChannelAdmin(
+                      this.allowedNumbers,
+                      waUserId,
+                      this.ctx.config.whatsapp?.adminNumber,
+                    ),
+                    channelId: 'whatsapp',
+                  },
+                  this.ctx.tabManager,
+                );
+                if (cmdResult.handled) {
+                  if (cmdResult.response)
+                    await sock.sendMessage(sender, { text: cmdResult.response });
+                  return;
+                }
+              }
+
+              await sock.sendPresenceUpdate('composing', sender).catch(() => {});
+
+              // Shared message pipeline
+              const pipelineResult = await processInboundMessage({
+                text,
+                media,
+                channelId: 'whatsapp',
+                tabManager: this.ctx.tabManager,
+                voiceReplyMode: this.ctx.config.voice?.replyMode,
+                ttsProvider: this.voice.tts,
+                userId: waUserId,
+                sendProgress: (msg) => {
+                  sock.sendMessage(sender, { text: msg }).catch(() => {});
+                },
+              });
+
+              await sock.sendPresenceUpdate('paused', sender).catch(() => {});
+
+              // Empty result means no prompt and no media
+              if (!pipelineResult.responseText) return;
+
+              // Send voice reply if TTS generated audio
+              if (pipelineResult.audioPath) {
+                await sock.sendMessage(sender, {
+                  audio: { url: pipelineResult.audioPath },
+                  mimetype: 'audio/ogg; codecs=opus',
+                  ptt: true,
+                });
+                if (pipelineResult.voiceOnly) return;
+              }
+
+              await this.sendResponse(sender, pipelineResult.responseText, pipelineResult.tabName);
+            } catch (err) {
+              logger.error('WhatsApp message handler error:', err);
+              await sock
+                .sendMessage(sender, {
+                  text: 'Something went wrong processing your message. Check daemon logs for details.',
+                })
+                .catch((sendErr: unknown) =>
+                  logger.error('WhatsApp: failed to send fallback error message:', sendErr),
+                );
+            }
+          })();
         }
       });
     } catch (err) {

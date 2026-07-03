@@ -4,19 +4,8 @@ import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 import { getDashboardHtml } from './html.js';
 import { logger } from '../util/logger.js';
+import { safeEqual } from '../util/safe-equal.js';
 import { dispatch, json } from './routes.js';
-
-function safeEqualToken(provided: string | undefined | null, expected: string): boolean {
-  if (!provided) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  try {
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
 
 function openBrowser(url: string): void {
   const p = platform();
@@ -31,6 +20,15 @@ const SECURITY_HEADERS = {
   'Referrer-Policy': 'no-referrer',
 };
 
+/** Extract the dashboard auth token from the Cookie header, if present. */
+function readDashCookie(cookieHeader: string | undefined): string | undefined {
+  return cookieHeader
+    ?.split(';')
+    .map((c) => c.trim())
+    .find((c) => c.startsWith('beecork_dash='))
+    ?.split('=')[1];
+}
+
 export function startDashboardServer(port = 0): void {
   // Generate auth token at server start (24 random bytes → 192-bit base64url).
   const authToken = crypto.randomBytes(24).toString('base64url');
@@ -41,15 +39,18 @@ export function startDashboardServer(port = 0): void {
 
     // Serve HTML
     if (path === '/' || path === '/index.html') {
-      const token = url.searchParams.get('token');
-      if (!token) {
-        res.writeHead(302, { Location: `/?token=${authToken}` });
-        res.end();
-        return;
-      }
-      if (!safeEqualToken(token, authToken)) {
-        res.writeHead(403, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS });
-        res.end('Forbidden');
+      // Accept the token from the query (first visit, from the terminal URL) OR
+      // the cookie (returning visit). Never hand the token out via a redirect to
+      // an unauthenticated request — that would let any local process scrape it
+      // off `GET /` and drive the RCE-capable /api/* surface.
+      const queryToken = url.searchParams.get('token');
+      const cookieToken = readDashCookie(req.headers.cookie);
+      const provided = queryToken || cookieToken;
+      if (!safeEqual(provided, authToken)) {
+        res.writeHead(401, { 'Content-Type': 'text/plain', ...SECURITY_HEADERS });
+        res.end(
+          'Unauthorized. Open the dashboard using the URL (with ?token=...) printed in the daemon terminal.',
+        );
         return;
       }
       res.writeHead(200, {
@@ -65,13 +66,9 @@ export function startDashboardServer(port = 0): void {
     if (path.startsWith('/api/')) {
       const authHeader = req.headers.authorization;
       const queryToken = url.searchParams.get('token');
-      const cookieToken = req.headers.cookie
-        ?.split(';')
-        .map((c) => c.trim())
-        .find((c) => c.startsWith('beecork_dash='))
-        ?.split('=')[1];
+      const cookieToken = readDashCookie(req.headers.cookie);
       const providedToken = authHeader?.replace('Bearer ', '') || queryToken || cookieToken;
-      if (!safeEqualToken(providedToken, authToken)) {
+      if (!safeEqual(providedToken, authToken)) {
         json(res, { error: 'Unauthorized' }, 401);
         return;
       }

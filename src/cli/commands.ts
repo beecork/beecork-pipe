@@ -258,7 +258,10 @@ export async function deleteMemory(id: string): Promise<void> {
 export async function updateBeecork(options: { check?: boolean }): Promise<void> {
   if (options.check) {
     try {
-      const latest = execSync('npm view beecork-pipe version', { encoding: 'utf-8' }).trim();
+      const latest = execSync('npm view beecork-pipe version', {
+        encoding: 'utf-8',
+        timeout: 15000,
+      }).trim();
       const current = VERSION;
       if (latest === current) {
         console.log(`Already up to date (v${current})`);
@@ -281,8 +284,11 @@ export async function updateBeecork(options: { check?: boolean }): Promise<void>
 
   console.log(`Updating beecork-pipe from v${VERSION}...`);
   try {
-    execSync('npm install -g beecork-pipe@latest', { stdio: 'inherit' });
-    const newVersion = execSync('npm view beecork-pipe version', { encoding: 'utf-8' }).trim();
+    execSync('npm install -g beecork-pipe@latest', { stdio: 'inherit', timeout: 300000 });
+    const newVersion = execSync('npm view beecork-pipe version', {
+      encoding: 'utf-8',
+      timeout: 15000,
+    }).trim();
     console.log(`Update complete! v${VERSION} → v${newVersion}`);
   } catch {
     console.error('Update failed. Try running: npm install -g beecork-pipe@latest');

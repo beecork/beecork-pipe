@@ -70,3 +70,17 @@ export function expandHome(p: string): string {
   }
   return p;
 }
+
+/**
+ * True if `dir` resolves to (or under) one of `roots`. Single source of truth
+ * for the "must be under an allowed root" check shared by the dashboard tab
+ * allowlist and the project-creation allowlist — the `+ path.sep` guard prevents
+ * a sibling like `/home/user-evil` from matching root `/home/user`.
+ */
+export function isPathWithinRoots(dir: string, roots: Array<string | undefined | null>): boolean {
+  const resolved = path.resolve(expandHome(dir));
+  return roots
+    .filter((r): r is string => typeof r === 'string' && r.length > 0)
+    .map((r) => path.resolve(expandHome(r)))
+    .some((root) => resolved === root || resolved.startsWith(root + path.sep));
+}

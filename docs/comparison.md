@@ -32,7 +32,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Mobile app | Coming soon | Via channels | Yes (iOS/Android) | Yes | Yes (iOS/Android) |
 | Desktop app | Coming soon | No | Yes (macOS) | No | Yes (macOS) |
 | CLI | Yes | No | No | No | No |
-| MCP server | Yes (38 tools) | No | Via Cowork | No | No |
+| MCP server | Yes (37 tools) | No | Via Cowork | No | No |
 | Webhook API | Yes | No | No | Agent API | No |
 | **Total channels** | **5 (more coming)** | **20+** | **3** | **4** | **2 (more coming)** |
 
@@ -91,13 +91,13 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 | Screen reading | Yes | No | Yes | Sandboxed browser | Yes |
 | Full Claude Computer Use | Paid plans | N/A | Included | N/A | N/A |
 
-**Verdict**: Dispatch and Manus have the most polished computer use. Beecork supports Claude Computer Use (mouse, keyboard, screen control) via the `beecork computer-use` command. Perplexity runs in isolated sandboxes.
+**Verdict**: Dispatch and Manus have the most polished computer use. Beecork supports Claude Computer Use (mouse, keyboard, screen control) via the `beecork-pipe computer-use` command. Perplexity runs in isolated sandboxes.
 
 ### Media Generation
 
 | Feature | Beecork | OpenClaw | Claude Dispatch | Perplexity Computer | Manus |
 |---|---|---|---|---|---|
-| Image generation | Yes (DALL-E, Recraft, Lyria) | Via skills | Via connectors | Yes (Nano Banana) | Via sandbox |
+| Image generation | Yes (DALL-E, Recraft, Nano Banana) | Via skills | Via connectors | Yes (Nano Banana) | Via sandbox |
 | Video generation | Yes (Runway, Veo, Kling) | No | No | Yes (Veo 3.1) | No |
 | Music/Audio generation | Yes (ElevenLabs, Lyria) | No | No | No | No |
 | Voice (STT/TTS) | Yes (Whisper + OpenAI/ElevenLabs) | No | No | No | No |
@@ -135,7 +135,7 @@ Five tools let you run AI agents that stay on and respond across messaging chann
 |---|---|---|---|---|---|
 | Setup time | ~5 min (wizard) | ~15-30 min | QR code scan | Sign up | Sign up |
 | CLI tools | Yes (20+ commands) | Limited | No | No | No |
-| Diagnostics | Yes (`beecork doctor`) | No | No | No | No |
+| Diagnostics | Yes (`beecork-pipe doctor`) | No | No | No | No |
 | Plugin system | Community channels | 100+ built-in skills | 8000+ via Zapier MCP | API | No |
 | Dashboard | Yes (web UI) | WebChat | Claude Desktop | Web app | Web app |
 
@@ -224,7 +224,7 @@ We believe in transparency. Here's where Beecork falls short today:
 | Music generation | Yes | No | No | No | No |
 | Voice (STT/TTS) | Yes | No | No | No | No |
 | CLI tools | Yes | Limited | No | No | No |
-| MCP integration | Yes (38 tools) | No | Yes | No | No |
+| MCP integration | Yes (37 tools) | No | Yes | No | No |
 | Claude Code | Yes | No | N/A | No | No |
 | Multi-model | Roadmap | Yes | No | Yes (19) | Yes |
 | Web dashboard | Yes | Yes | Yes | Yes | Yes |

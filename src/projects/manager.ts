@@ -3,9 +3,9 @@ import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { getDb } from '../db/index.js';
 import { getConfig } from '../config.js';
-import { expandHome } from '../util/paths.js';
+import { expandHome, isPathWithinRoots } from '../util/paths.js';
 import { logger } from '../util/logger.js';
-import { invalidateProjectCache } from './router.js';
+import { invalidateProjectCache } from './cache.js';
 import type { Project } from './types.js';
 
 interface ProjectRow {
@@ -105,15 +105,12 @@ export function createProject(name: string, parentDir?: string): Project {
   const requestedParent = parentDir || getWorkspaceRoot();
   const resolvedParent = path.resolve(expandHome(requestedParent));
 
-  // Allowlist: parent must resolve under workspace root or one of the configured scan paths.
+  // Allowlist: parent must resolve under workspace root or one of the configured
+  // scan paths. Uses the shared matcher so this and the dashboard's tab
+  // allowlist can't drift apart.
   const config = getConfig();
-  const allowedRoots = [getWorkspaceRoot(), ...(config.projectScanPaths ?? [])].map((r) =>
-    path.resolve(expandHome(r)),
-  );
-  const isAllowed = allowedRoots.some(
-    (root) => resolvedParent === root || resolvedParent.startsWith(root + path.sep),
-  );
-  if (!isAllowed) {
+  const allowedRoots = [getWorkspaceRoot(), ...(config.projectScanPaths ?? [])];
+  if (!isPathWithinRoots(requestedParent, allowedRoots)) {
     throw new Error(
       `Project parent directory must be under workspace root or a configured scan path. Allowed: ${allowedRoots.join(', ')}`,
     );

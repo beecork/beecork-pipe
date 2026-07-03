@@ -19,6 +19,24 @@ import { processInboundMessage } from './pipeline.js';
 import { isChannelAdmin } from './admin.js';
 import type { Channel, ChannelContext, MediaAttachment, SendOptions } from './types.js';
 
+/**
+ * Whether an inbound Discord message is authorized to reach the pipeline.
+ * Authorization is by IDENTITY on every surface (the author must be in the
+ * allowlist); servers additionally require an @mention. A mention alone is NOT
+ * sufficient — otherwise any server member could drive a Claude Code subprocess.
+ * Pure + exported so the C1 fix is pinned by a unit test.
+ */
+export function isDiscordMessageAllowed(
+  allowedUserIds: Set<string>,
+  authorId: string,
+  isDM: boolean,
+  isMentioned: boolean,
+): boolean {
+  if (!allowedUserIds.has(authorId)) return false;
+  if (!isDM && !isMentioned) return false;
+  return true;
+}
+
 export class DiscordChannel implements Channel {
   readonly id = 'discord';
   readonly name = 'Discord';
@@ -39,6 +57,11 @@ export class DiscordChannel implements Channel {
     if (!discordConfig?.token) {
       logger.warn('No Discord token configured');
       return;
+    }
+    if (this.allowedUserIds.size === 0) {
+      logger.warn(
+        'Discord: allowedUserIds is empty — the bot will ignore every message (DMs and servers). Add user IDs to discord.allowedUserIds to enable it.',
+      );
     }
 
     // Dynamic import since discord.js might not be installed
@@ -63,12 +86,8 @@ export class DiscordChannel implements Channel {
       const isDM = !message.guild;
       const isMentioned = message.mentions.has(this.client.user);
 
-      // In DMs: only allow users in the allowlist
-      // In servers: only respond if @mentioned
-      if (isDM) {
-        if (!this.allowedUserIds.has(message.author.id)) return;
-      } else {
-        if (!isMentioned) return;
+      if (!isDiscordMessageAllowed(this.allowedUserIds, message.author.id, isDM, isMentioned)) {
+        return;
       }
 
       // Rate limit

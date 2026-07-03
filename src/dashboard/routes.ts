@@ -3,9 +3,9 @@
 // chooses the first matching entry and invokes its handler.
 
 import http from 'node:http';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import os from 'node:os';
-import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { getDb } from '../db/index.js';
@@ -13,11 +13,38 @@ import { logger } from '../util/logger.js';
 import { validateTabName, validateTabNameOrDefault, getConfig } from '../config.js';
 import { createTabRecord } from '../db/index.js';
 import { VERSION } from '../version.js';
-import { getDaemonPid } from '../cli/helpers.js';
+import { getDaemonPid } from '../util/pid.js';
 import { MESSAGE_LIMITS } from '../util/text.js';
 import { TabStore } from '../session/tab-store.js';
 import { PendingMessageStore } from '../session/pending-store.js';
-import { expandHome } from '../util/paths.js';
+import {
+  isPathWithinRoots,
+  getCronReloadSignalPath,
+  getWatcherReloadSignalPath,
+} from '../util/paths.js';
+import { isSafeNpmPackage } from '../util/npm.js';
+
+/**
+ * Tell the in-process task/watcher schedulers to reload from the DB. The
+ * dashboard runs inside the daemon, but a scheduler only re-reads its in-memory
+ * schedule when its signal file appears (checked every poll tick) — without it,
+ * a task/watcher created or deleted from the dashboard keeps its stale scheduled
+ * state until the daemon restarts.
+ */
+function signalCronReload(): void {
+  try {
+    fs.writeFileSync(getCronReloadSignalPath(), String(Date.now()));
+  } catch (err) {
+    logger.warn('Failed to write cron-reload signal:', err);
+  }
+}
+function signalWatcherReload(): void {
+  try {
+    fs.writeFileSync(getWatcherReloadSignalPath(), String(Date.now()));
+  } catch (err) {
+    logger.warn('Failed to write watcher-reload signal:', err);
+  }
+}
 
 const execFileAsync = promisify(execFile);
 
@@ -28,16 +55,13 @@ const execFileAsync = promisify(execFile);
  * dashboard cannot create a tab pointing at /etc or another user's home.
  */
 function isAllowedWorkingDir(dir: string): boolean {
-  const resolved = path.resolve(expandHome(dir));
   const config = getConfig();
-  const home = os.homedir();
-  const roots = [config.tabs?.default?.workingDir, ...(config.projectScanPaths ?? []), home]
-    .filter((r): r is string => typeof r === 'string' && r.length > 0)
-    .map((r) => path.resolve(expandHome(r)));
-  return roots.some((root) => resolved === root || resolved.startsWith(root + path.sep));
+  return isPathWithinRoots(dir, [
+    config.tabs?.default?.workingDir,
+    ...(config.projectScanPaths ?? []),
+    os.homedir(),
+  ]);
 }
-
-const SAFE_NPM_PACKAGE = /^[@a-zA-Z0-9_/.-]+$/;
 
 interface SendMessageBody {
   message: string;
@@ -284,6 +308,7 @@ export const ROUTES: RouteEntry[] = [
         lastRunAt: null,
         nextRunAt: null,
       });
+      signalCronReload();
       json(res, { success: true, id });
     },
   },
@@ -296,6 +321,7 @@ export const ROUTES: RouteEntry[] = [
       const taskId = decodeURIComponent(path.split('/')[3]);
       const { TaskStore } = await import('../tasks/store.js');
       new TaskStore().delete(taskId);
+      signalCronReload();
       json(res, { success: true });
     },
   },
@@ -318,6 +344,7 @@ export const ROUTES: RouteEntry[] = [
       const id = decodeURIComponent(path.split('/')[3]);
       const { WatcherStore } = await import('../watchers/store.js');
       new WatcherStore().delete(id);
+      signalWatcherReload();
       json(res, { success: true });
     },
   },
@@ -620,7 +647,7 @@ export const ROUTES: RouteEntry[] = [
       }
       // Defense-in-depth: even though pkgName is allowlisted, validate against the
       // same regex used elsewhere so a typo in the allowlist can't widen the surface.
-      if (!SAFE_NPM_PACKAGE.test(pkgName)) {
+      if (!isSafeNpmPackage(pkgName)) {
         json(res, { error: `Invalid package name: ${pkgName}` }, 400);
         return;
       }

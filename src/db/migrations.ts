@@ -297,7 +297,7 @@ const MIGRATIONS: Migration[] = [
   {
     version: 26,
     description:
-      'Add status column to pending_messages for 3-state lifecycle (pending → processing → done|failed); allow nullable tab_name for notifications',
+      "Add status column to pending_messages for 3-state lifecycle (pending → processing → done|failed). NOTE: tab_name remains NOT NULL — notification rows use '' as a placeholder and the consumer branches on type, so tab_name is not read for them (a nullable reshape would need the CREATE-new→INSERT-SELECT→DROP→RENAME pattern documented above).",
     up: `
       ALTER TABLE pending_messages ADD COLUMN status TEXT NOT NULL DEFAULT 'pending';
       UPDATE pending_messages SET status = 'done' WHERE processed = 1;
@@ -319,6 +319,18 @@ const MIGRATIONS: Migration[] = [
     description:
       'Add idx_tabs_working_dir for the per-message routing query that finds tabs by project path',
     up: 'CREATE INDEX IF NOT EXISTS idx_tabs_working_dir ON tabs(working_dir, last_activity_at)',
+  },
+  {
+    version: 29,
+    description:
+      'Add ref_id to pending_messages so a delegation dispatch carries its delegation id — the completing run then closes that exact delegation instead of "newest pending to this tab"',
+    up: 'ALTER TABLE pending_messages ADD COLUMN ref_id TEXT',
+  },
+  {
+    version: 30,
+    description:
+      'Add claimed_at to pending_messages so stuck-processing recovery keys off when a row was claimed (not created) — a row claimed shortly before a crash is no longer stranded until a much later restart',
+    up: 'ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT',
   },
 ];
 
@@ -390,11 +402,19 @@ export function runMigrations(db: Database.Database): void {
           db.exec(stmt);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          // "Object already in target state" errors are only safe to swallow for
+          // idempotent DDL (CREATE/ALTER/DROP re-run after a partial migration).
+          // A DATA statement (UPDATE/DELETE/INSERT ... SELECT) that hits the same
+          // error is a real backfill failure — swallowing it would silently skip
+          // a data change while still bumping schema_version, so let it throw and
+          // roll the whole migration back.
+          const isDDL = /^\s*(CREATE|ALTER|DROP)\b/i.test(stmt);
           if (
-            msg.includes('already exists') ||
-            msg.includes('no such column') ||
-            msg.includes('no such table') ||
-            msg.includes('no such index')
+            isDDL &&
+            (msg.includes('already exists') ||
+              msg.includes('no such column') ||
+              msg.includes('no such table') ||
+              msg.includes('no such index'))
           ) {
             logger.debug(
               `Migration v${migration.version}: object already in target state, skipping statement`,

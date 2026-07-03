@@ -257,8 +257,9 @@ export class TaskScheduler {
       this.nextRunAt.delete(job.id);
       this.failureCounts.delete(job.id);
       // Notify once. Subsequent enable + re-failure will trigger again.
+      // (There is no re-enable tool/route today, so point at recreate.)
       this.onNotify?.(
-        `Task "${job.name}" auto-disabled after ${count} consecutive failures. Re-enable from the dashboard or via beecork_task_update.`,
+        `Task "${job.name}" auto-disabled after ${count} consecutive failures. Fix the underlying issue, then recreate it with beecork_task_create (or from the dashboard).`,
       ).catch(() => {});
     }
   }
@@ -310,17 +311,22 @@ export function intervalToCron(interval: string): string | null {
   const totalMins = weeks * 7 * 24 * 60 + days * 24 * 60 + hours * 60 + mins;
   if (totalMins <= 0) return null;
 
-  // Simple minute interval
-  if (totalMins <= 59) return `*/${totalMins} * * * *`;
-  // Hourly intervals
-  if (mins === 0 && days === 0 && weeks === 0 && hours > 0 && hours <= 23)
-    return `0 */${hours} * * *`;
-  // Daily intervals
-  if (mins === 0 && hours === 0 && weeks === 0 && days > 0) return `0 0 */${days} * *`;
-  // Weekly intervals
-  if (mins === 0 && hours === 0 && days === 0 && weeks > 0) return `0 0 * * 0`;
+  // Only emit a cron when it fires at EXACTLY the requested interval. Anything
+  // that doesn't align evenly (45m → :00/:45, 5h → 4h wrap at midnight,
+  // multi-day/week → day-of-month/week stepping that resets each period) returns
+  // null and is scheduled via intervalToMs (fromMs + ms) instead — exact spacing.
 
-  // Combined or large intervals -- return null, handled by intervalToMs fallback
+  // Minute intervals that divide the hour evenly (1,2,3,4,5,6,10,12,15,20,30).
+  if (totalMins <= 59) return 60 % totalMins === 0 ? `*/${totalMins} * * * *` : null;
+  // Whole-hour intervals that divide the day evenly (1,2,3,4,6,8,12).
+  if (mins === 0 && days === 0 && weeks === 0 && hours > 0)
+    return 24 % hours === 0 ? `0 */${hours} * * *` : null;
+  // Daily — only every single day aligns cleanly (day-of-month stepping resets monthly).
+  if (mins === 0 && hours === 0 && weeks === 0 && days === 1) return `0 0 */1 * *`;
+  // Weekly — only every single week.
+  if (mins === 0 && hours === 0 && days === 0 && weeks === 1) return `0 0 * * 0`;
+
+  // Everything else (multi-day, multi-week, combined, non-divisor) → intervalToMs fallback.
   return null;
 }
 

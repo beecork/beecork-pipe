@@ -4,9 +4,12 @@ import type { SubprocessCallbacks } from '../../src/session/subprocess.js';
 
 let testDb: Database.Database;
 
-vi.mock('../../src/db/index.js', () => ({
-  getDb: () => testDb,
-}));
+// Preserve the real module (so SCHEMA/runMigrations build the true schema) but
+// point getDb at the in-memory test DB.
+vi.mock('../../src/db/index.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../src/db/index.js')>();
+  return { ...orig, getDb: () => testDb };
+});
 
 vi.mock('../../src/util/logger.js', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
@@ -58,39 +61,15 @@ vi.mock('../../src/session/subprocess.js', () => {
 });
 
 import { TabManager } from '../../src/session/manager.js';
+import { SCHEMA } from '../../src/db/index.js';
+import { runMigrations } from '../../src/db/migrations.js';
 import type { BeecorkConfig } from '../../src/types.js';
 
-const TABS_SCHEMA = `
-  CREATE TABLE tabs (
-    id TEXT PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'idle',
-    working_dir TEXT NOT NULL,
-    pid INTEGER,
-    system_prompt TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_activity_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tab_id TEXT NOT NULL,
-    role TEXT NOT NULL,
-    content TEXT NOT NULL,
-    cost_usd REAL,
-    tokens_in INTEGER,
-    tokens_out INTEGER,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-  );
-  CREATE TABLE pending_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tab_name TEXT NOT NULL,
-    message TEXT NOT NULL,
-    type TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    processed INTEGER NOT NULL DEFAULT 0
-  );
-`;
+/** Build the real, fully-migrated schema (not a hand-copy that drifts). */
+function initSchema(db: Database.Database): void {
+  db.exec(SCHEMA);
+  runMigrations(db);
+}
 
 const baseConfig: BeecorkConfig = {
   telegram: { token: '', allowedUserIds: [] },
@@ -140,7 +119,7 @@ function emitSilentStall() {
 describe('TabManager — stale-session retry', () => {
   beforeEach(() => {
     testDb = new Database(':memory:');
-    testDb.exec(TABS_SCHEMA);
+    initSchema(testDb);
     sendCalls.length = 0;
     sendScript = [];
   });
@@ -230,7 +209,7 @@ describe('TabManager — stale-session retry', () => {
 describe('TabManager — silent-stall retry', () => {
   beforeEach(() => {
     testDb = new Database(':memory:');
-    testDb.exec(TABS_SCHEMA);
+    initSchema(testDb);
     sendCalls.length = 0;
     sendScript = [];
   });

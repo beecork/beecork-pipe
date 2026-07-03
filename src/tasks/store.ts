@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import type Database from 'better-sqlite3';
 import { getDb } from '../db/index.js';
 import { getCrontabPath } from '../util/paths.js';
 import { logger } from '../util/logger.js';
@@ -41,28 +42,41 @@ function rowToTask(row: TaskRow): Task {
 let migrationChecked = false;
 
 export class TaskStore {
-  constructor() {
-    if (!migrationChecked) {
+  private injectedDb?: Database.Database;
+
+  // Pass a db (e.g. the MCP server's own connection) to avoid triggering the
+  // daemon-side getDb() — which runs migrations + starts a WAL-checkpoint timer.
+  // The MCP server runs as a child of `claude`, a separate process, and should
+  // not re-run migrations or hold a second daemon-grade connection.
+  constructor(db?: Database.Database) {
+    this.injectedDb = db;
+    // Only the daemon (no injected db) runs the one-shot crontab.json → SQLite
+    // migration; the MCP child must not.
+    if (!db && !migrationChecked) {
       migrationChecked = true;
       this.migrateFromJson();
     }
   }
 
+  private db(): Database.Database {
+    return this.injectedDb ?? getDb();
+  }
+
   list(): Task[] {
-    const db = getDb();
+    const db = this.db();
     return (db.prepare('SELECT * FROM tasks ORDER BY created_at').all() as TaskRow[]).map(
       rowToTask,
     );
   }
 
   get(id: string): Task | undefined {
-    const db = getDb();
+    const db = this.db();
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | undefined;
     return row ? rowToTask(row) : undefined;
   }
 
   add(job: Task): void {
-    const db = getDb();
+    const db = this.db();
     db.prepare(
       `INSERT INTO tasks (id, name, schedule_type, schedule, tab_name, message, payload_type, enabled, created_at, last_run_at, next_run_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -82,7 +96,7 @@ export class TaskStore {
   }
 
   update(id: string, updates: Partial<Task>): boolean {
-    const db = getDb();
+    const db = this.db();
     const existing = this.get(id);
     if (!existing) return false;
 
@@ -96,13 +110,14 @@ export class TaskStore {
     if (scheduleChanged && updates.nextRunAt === undefined) merged.nextRunAt = null;
 
     db.prepare(
-      `UPDATE tasks SET name=?, schedule_type=?, schedule=?, tab_name=?, message=?, enabled=?, last_run_at=?, next_run_at=? WHERE id=?`,
+      `UPDATE tasks SET name=?, schedule_type=?, schedule=?, tab_name=?, message=?, payload_type=?, enabled=?, last_run_at=?, next_run_at=? WHERE id=?`,
     ).run(
       merged.name,
       merged.scheduleType,
       merged.schedule,
       merged.tabName,
       merged.message,
+      merged.payloadType,
       merged.enabled ? 1 : 0,
       merged.lastRunAt,
       merged.nextRunAt,
@@ -112,7 +127,7 @@ export class TaskStore {
   }
 
   delete(id: string): boolean {
-    const db = getDb();
+    const db = this.db();
     const result = db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
     return result.changes > 0;
   }
@@ -122,7 +137,7 @@ export class TaskStore {
     const jsonPath = getCrontabPath();
     if (!fs.existsSync(jsonPath)) return;
 
-    const db = getDb();
+    const db = this.db();
     const count = db.prepare('SELECT COUNT(*) as count FROM tasks').get() as { count: number };
     if (count.count > 0) {
       // Already migrated, clean up JSON

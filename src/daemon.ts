@@ -133,9 +133,6 @@ async function main(): Promise<void> {
   // 5. Ensure default tab
   tabManager.ensureTab('default');
 
-  // 6. Recover crashed tabs
-  await recoverCrashedTabs();
-
   // Start channels via registry
   channelRegistry = new ChannelRegistry();
   const channelCtx = { config, tabManager, notifyCallback: broadcastNotify };
@@ -201,6 +198,13 @@ async function main(): Promise<void> {
   // Wire up broadcast notifications to all active channels
   tabManager.setNotifyCallback(broadcastNotify);
 
+  // Recover crashed tabs. This runs AFTER channels are started and the notify
+  // callback is wired, so the per-tab "recovered / recovery FAILED" messages
+  // actually reach the user — running it before channel startup silently
+  // dropped every notification. Awaited before the schedulers/poll loop start
+  // so a recovering tab can't race a freshly-fired scheduled task.
+  await recoverCrashedTabs();
+
   // Pending-message dispatcher (replaces TabManager.processPendingMessages).
   // Owns the poll-loop side; uses PendingMessageStore for atomic claim/release.
   pendingDispatcher = new PendingMessageDispatcher(tabManager, channelRegistry, broadcastNotify);
@@ -218,30 +222,36 @@ async function main(): Promise<void> {
   // 10. Start IPC polling
   let lastMediaCleanup = 0;
   let lastAnomalyCheck = 0;
-  pollInterval = setInterval(() => {
+  // Each subsystem gets its own try/catch: a throw in one (e.g. a scheduler)
+  // must not skip the rest of the tick (e.g. pending-message dispatch) for that
+  // cycle.
+  const safeTick = (name: string, fn: () => void): void => {
     try {
-      taskScheduler.checkForReload();
-      watcherScheduler.checkForReload();
-      taskScheduler.tick();
-      watcherScheduler.tick();
-      pendingDispatcher.tick();
-      // Media cleanup every 60 seconds
-      if (Date.now() - lastMediaCleanup > 60000) {
-        lastMediaCleanup = Date.now();
-        cleanupMedia();
-      }
-      // Anomaly detection (hourly)
-      if (Date.now() - lastAnomalyCheck > 3600000) {
-        lastAnomalyCheck = Date.now();
-        import('./observability/analytics.js')
-          .then(({ checkAnomalies }) => {
-            const anomaly = checkAnomalies();
-            if (anomaly) broadcastNotify(anomaly);
-          })
-          .catch((err) => logger.debug('Anomaly check failed:', err));
-      }
+      fn();
     } catch (err) {
-      logger.error('Poll error:', err);
+      logger.error(`Poll subsystem "${name}" failed:`, err);
+    }
+  };
+  pollInterval = setInterval(() => {
+    safeTick('task-reload', () => taskScheduler.checkForReload());
+    safeTick('watcher-reload', () => watcherScheduler.checkForReload());
+    safeTick('task-tick', () => taskScheduler.tick());
+    safeTick('watcher-tick', () => watcherScheduler.tick());
+    safeTick('pending-dispatch', () => pendingDispatcher.tick());
+    // Media cleanup every 60 seconds
+    if (Date.now() - lastMediaCleanup > 60000) {
+      lastMediaCleanup = Date.now();
+      safeTick('media-cleanup', () => cleanupMedia());
+    }
+    // Anomaly detection (hourly)
+    if (Date.now() - lastAnomalyCheck > 3600000) {
+      lastAnomalyCheck = Date.now();
+      import('./observability/analytics.js')
+        .then(({ checkAnomalies }) => {
+          const anomaly = checkAnomalies();
+          if (anomaly) broadcastNotify(anomaly);
+        })
+        .catch((err) => logger.debug('Anomaly check failed:', err));
     }
   }, 5000);
 

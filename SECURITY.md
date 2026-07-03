@@ -21,7 +21,7 @@ Please include:
 
 ## Scope
 
-This policy covers the `beecork` npm package and the code in this repository.
+This policy covers the `beecork-pipe` npm package and the code in this repository.
 
 ## What Qualifies
 

@@ -128,14 +128,25 @@ export class TabManager {
       onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void;
       projectPath?: string;
       _compactionDepth?: number;
+      delegationId?: string;
     },
   ): Promise<SendResult> {
     const tab = this.ensureTab(tabName, options?.projectPath);
 
-    // If a subprocess is already running on this tab, queue the message
+    // If a subprocess is already running on this tab, queue the message —
+    // carrying its options so streaming/resume/delegation behavior survives.
     if (this.subprocesses.get(tabName)?.isRunning) {
       return new Promise((resolve, reject) => {
-        const accepted = this.queue.enqueue(tabName, { prompt, resolve, reject });
+        const accepted = this.queue.enqueue(tabName, {
+          prompt,
+          resume: options?.resume ?? false,
+          onTextChunk: options?.onTextChunk,
+          onToolUse: options?.onToolUse,
+          compactionDepth: options?._compactionDepth,
+          delegationId: options?.delegationId,
+          resolve,
+          reject,
+        });
         if (!accepted) {
           reject(new Error(`Queue full for tab "${tabName}". Try again later.`));
           return;
@@ -151,6 +162,9 @@ export class TabManager {
       options?.onTextChunk,
       options?.onToolUse,
       options?._compactionDepth,
+      false,
+      0,
+      options?.delegationId,
     );
   }
 
@@ -208,6 +222,10 @@ export class TabManager {
     compactionDepth?: number,
     forceFresh: boolean = false,
     retryDepth: number = 0,
+    // Set when this run is fulfilling a delegation — on success it completes
+    // exactly this delegation. Threaded through retries/compaction so a
+    // recovered delegation run still closes its delegation.
+    delegationId?: string,
   ): Promise<SendResult> {
     const db = getDb();
 
@@ -302,6 +320,12 @@ export class TabManager {
 
       const callbacks: SubprocessCallbacks = {
         onEvent: (event: StreamEvent) => {
+          // A terminal failure (maxRuntime kill, spawn error) already rejected
+          // and advanced the queue via onError; the next message's subprocess may
+          // already be running on this tab. Ignore late events from the dying
+          // process so they can't clobber the new run's session_id (below) or
+          // emit spurious loop notifications.
+          if (errored) return;
           // Capture session_id from StreamInit and update tab record
           if (event.type === 'system' && 'subtype' in event && event.subtype === 'init') {
             const initEvent = event as StreamInit;
@@ -389,6 +413,7 @@ export class TabManager {
               compactionDepth,
               true,
               retryDepth + 1,
+              delegationId,
             )
               .then(resolve)
               .catch(reject);
@@ -417,6 +442,7 @@ export class TabManager {
                 compactionDepth,
                 forceFresh,
                 retryDepth + 1,
+                delegationId,
               )
                 .then(resolve)
                 .catch(reject);
@@ -431,9 +457,7 @@ export class TabManager {
             logger.warn(
               `[${tab.name}] Still no output after retry — surfacing suspected network stall.`,
             );
-            db.prepare(
-              'UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?',
-            ).run('idle', new Date().toISOString(), tab.name);
+            TabStore.setStatus(tab.name, 'idle', db);
             logActivity('task_failed', 'Subprocess silent stall (retry exhausted)', {
               tabName: tab.name,
             });
@@ -450,7 +474,12 @@ export class TabManager {
 
           // Store assistant response. Skip empty content (typically failed/error runs) so
           // it doesn't trigger the hasDbHistory shouldResume override on future calls.
-          if (result.text.trim() !== '') {
+          // Also skip if the tab was closed/deleted mid-run (/close, MCP
+          // beecork_close_tab): its row is gone and this INSERT's tab_id FK would
+          // otherwise throw SQLITE_CONSTRAINT_FOREIGNKEY.
+          const tabStillExists =
+            db.prepare('SELECT 1 FROM tabs WHERE id = ?').get(tab.id) !== undefined;
+          if (tabStillExists && result.text.trim() !== '') {
             db.prepare(
               'INSERT INTO messages (tab_id, role, content, cost_usd, tokens_in, tokens_out) VALUES (?, ?, ?, ?, ?, ?)',
             ).run(
@@ -472,9 +501,7 @@ export class TabManager {
           }
 
           // Update tab
-          db.prepare(
-            'UPDATE tabs SET status = ?, last_activity_at = ?, pid = NULL WHERE name = ?',
-          ).run('idle', new Date().toISOString(), tab.name);
+          TabStore.setStatus(tab.name, 'idle', db);
 
           logActivity('task_completed', 'Message processed', {
             tabName: tab.name,
@@ -510,9 +537,14 @@ export class TabManager {
             return;
           }
 
-          // Check for delegation completion
+          // Check for delegation completion. Only a run that is actually
+          // fulfilling a delegation (delegationId set, threaded from the
+          // pending 'delegation' row) closes it — an unrelated message finishing
+          // on this tab no longer completes and steals someone else's delegation.
           try {
-            const delegation = completeDelegation(tab.name, result.text);
+            const delegation = delegationId
+              ? completeDelegation(delegationId, result.text)
+              : null;
             if (delegation && delegation.returnToTab) {
               PendingMessageStore.enqueueDelegationResult(
                 delegation.returnToTab,
@@ -580,7 +612,19 @@ export class TabManager {
       next.reject(new Error(`Tab "${tabName}" not found`));
       return;
     }
-    this.executeMessage(tab, next.prompt, false).then(next.resolve).catch(next.reject);
+    this.executeMessage(
+      tab,
+      next.prompt,
+      next.resume ?? false,
+      next.onTextChunk,
+      next.onToolUse,
+      next.compactionDepth,
+      false,
+      0,
+      next.delegationId,
+    )
+      .then(next.resolve)
+      .catch(next.reject);
   }
 
   private updateTabStatus(tabName: string, status: TabStatus): void {

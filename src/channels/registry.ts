@@ -48,16 +48,6 @@ export class ChannelRegistry {
     }
   }
 
-  /** Get a channel by ID */
-  get(id: string): Channel | undefined {
-    return this.channels.get(id);
-  }
-
-  /** Get all registered channels */
-  getAll(): Channel[] {
-    return Array.from(this.channels.values());
-  }
-
   /** Broadcast a notification to all channels */
   async broadcastNotify(text: string, urgent?: boolean): Promise<void> {
     await Promise.all(

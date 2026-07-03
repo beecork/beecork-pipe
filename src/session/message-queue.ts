@@ -12,6 +12,14 @@ export const MAX_QUEUE_SIZE = 10;
 
 export interface QueuedMessage {
   prompt: string;
+  // Render/behavior options carried so a message queued behind a busy tab runs
+  // with the same streaming callbacks, resume flag, and delegation correlation
+  // as it would have unqueued — previously these were dropped on dequeue.
+  resume?: boolean;
+  onTextChunk?: (text: string) => void;
+  onToolUse?: (toolName: string, toolInput: Record<string, unknown>) => void;
+  compactionDepth?: number;
+  delegationId?: string;
   resolve: (r: SendResult) => void;
   reject: (e: Error) => void;
 }

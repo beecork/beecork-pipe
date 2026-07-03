@@ -51,10 +51,6 @@ export const MemoryStore = {
     return result.changes > 0;
   },
 
-  count(db: Database.Database = getDb()): number {
-    return (db.prepare('SELECT COUNT(*) as c FROM memories').get() as { c: number }).c;
-  },
-
   list(
     opts: { limit?: number; offset?: number; query?: string } = {},
     db: Database.Database = getDb(),

@@ -1,23 +1,23 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isSafeNpmPackage, installGlobalNpmPackage } from '../util/npm.js';
 
 const CHANNEL_PREFIX = 'beecork-channel-';
-const SAFE_NPM_PACKAGE = /^[@a-zA-Z0-9_/.-]+$/;
 
 export function channelInstall(packageName: string): void {
   // Normalize name
   const fullName = packageName.startsWith(CHANNEL_PREFIX)
     ? packageName
     : `${CHANNEL_PREFIX}${packageName}`;
-  if (!SAFE_NPM_PACKAGE.test(fullName)) {
+  if (!isSafeNpmPackage(fullName)) {
     console.error(`Invalid package name: ${fullName}`);
     process.exit(1);
   }
 
   console.log(`Installing channel: ${fullName}...`);
   try {
-    execFileSync('npm', ['install', '-g', fullName], { stdio: 'inherit' });
+    installGlobalNpmPackage(fullName);
     console.log(`\nChannel "${fullName}" installed.`);
     console.log('Restart the daemon to activate: beecork-pipe stop && beecork-pipe start');
   } catch {

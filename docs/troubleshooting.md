@@ -24,37 +24,37 @@ claude --version
 
 Run diagnostics:
 ```bash
-beecork doctor
+beecork-pipe doctor
 ```
 
 Check logs:
 ```bash
-beecork logs
+beecork-pipe logs
 ```
 
 Check for stale PID file:
 ```bash
-cat ~/.beecork/beecork.pid
+cat ~/.beecork-pipe/beecork.pid
 # If the PID doesn't match a running process:
-rm ~/.beecork/beecork.pid
-beecork start
+rm ~/.beecork-pipe/beecork.pid
+beecork-pipe start
 ```
 
 ### Bot not responding
 
-1. Check daemon is running: `beecork status`
-2. Check Telegram token is valid: `beecork doctor`
-3. Check your user ID is in the allowlist: look at `~/.beecork/config.json`
-4. Check logs: `beecork logs`
+1. Check daemon is running: `beecork-pipe status`
+2. Check Telegram token is valid: `beecork-pipe doctor`
+3. Check your user ID is in the allowlist: look at `~/.beecork-pipe/config.json`
+4. Check logs: `beecork-pipe logs`
 
 ### High costs
 
 Check spending:
 ```bash
-beecork status  # Shows cost summary
+beecork-pipe status  # Shows cost summary
 ```
 
-Set a budget limit in `~/.beecork/config.json`:
+Set a budget limit in `~/.beecork-pipe/config.json`:
 ```json
 {
   "claudeCode": {

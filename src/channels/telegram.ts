@@ -1,7 +1,7 @@
 import TelegramBot from 'node-telegram-bot-api';
 import fs from 'node:fs';
 import path from 'node:path';
-import { chunkText, parseTabMessage, formatTabbedResponse } from '../util/text.js';
+import { chunkText, parseTabMessage, formatTabbedResponse, MESSAGE_LIMITS } from '../util/text.js';
 import { logger } from '../util/logger.js';
 import { retryWithBackoff } from '../util/retry.js';
 import { sendChunkedResponse } from './send-helpers.js';
@@ -32,7 +32,7 @@ function sanitizeBotToken(text: string): string {
 export class TelegramChannel implements Channel {
   readonly id = 'telegram';
   readonly name = 'Telegram';
-  readonly maxMessageLength = 4096;
+  readonly maxMessageLength = MESSAGE_LIMITS.CHUNK;
 
   private bot: TelegramBot;
   private ctx: ChannelContext;
@@ -316,9 +316,9 @@ export class TelegramChannel implements Channel {
 
         if (!shouldActivate) return;
 
-        // Group rate limiting
+        // Group rate limiting — honor the configured per-group cap.
         const groupKey = `group:${chatId}`;
-        if (!groupLimiter.check(groupKey)) {
+        if (!groupLimiter.check(groupKey, groupConfig.maxResponsesPerMinute)) {
           // Silently ignore — don't spam the group with rate limit messages
           return;
         }
@@ -609,7 +609,7 @@ export class TelegramChannel implements Channel {
 
         try {
           const finalText = formatTabbedResponse(responseText, responseTab);
-          if (finalText.length <= 4096) {
+          if (finalText.length <= this.maxMessageLength) {
             await this.bot.editMessageText(finalText, { chat_id: chatId, message_id: streamMsgId });
           } else {
             await this.sendResponse(chatId, responseText, responseTab);

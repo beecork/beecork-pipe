@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { isSafeNpmPackage, installGlobalNpmPackage } from '../util/npm.js';
 
 const BEECORK_PREFIXES = [
   'beecork-capability-',
@@ -6,7 +6,6 @@ const BEECORK_PREFIXES = [
   'beecork-channel-',
   'beecork-watcher-',
 ];
-const SAFE_NPM_PACKAGE = /^[@a-zA-Z0-9_/.-]+$/;
 
 export async function storeSearch(query: string): Promise<void> {
   console.log(`\nSearching for "${query}"...\n`);
@@ -69,13 +68,13 @@ export function storeInstall(packageName: string): void {
     fullName = `beecork-capability-${packageName}`;
   }
 
-  if (!SAFE_NPM_PACKAGE.test(fullName)) {
+  if (!isSafeNpmPackage(fullName)) {
     console.error(`Invalid package name: ${fullName}`);
     return;
   }
   console.log(`\nInstalling ${fullName}...\n`);
   try {
-    execFileSync('npm', ['install', '-g', fullName], { stdio: 'inherit' });
+    installGlobalNpmPackage(fullName);
     console.log(`\n${fullName} installed.`);
     console.log('Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
   } catch {
@@ -84,9 +83,9 @@ export function storeInstall(packageName: string): void {
       const baseName = packageName;
       for (const prefix of ['beecork-media-', 'beecork-channel-', 'beecork-']) {
         const altName = prefix + baseName;
-        if (!SAFE_NPM_PACKAGE.test(altName)) continue;
+        if (!isSafeNpmPackage(altName)) continue;
         try {
-          execFileSync('npm', ['install', '-g', altName], { stdio: 'inherit' });
+          installGlobalNpmPackage(altName);
           console.log(`\n${altName} installed.`);
           console.log('Restart daemon to activate: beecork-pipe stop && beecork-pipe start\n');
           return;

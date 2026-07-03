@@ -1,6 +1,15 @@
 import { getDb } from '../db/index.js';
 import { listProjects, getProject, ensureCategory, touchProject } from './manager.js';
+import {
+  getProjectsCache,
+  setProjectsCache,
+  invalidateProjectCache,
+  type CachedProject,
+} from './cache.js';
 import type { Project, RouteDecision, RoutingContext } from './types.js';
+
+// Re-exported so existing importers of `invalidateProjectCache` from router keep working.
+export { invalidateProjectCache };
 
 // Category keywords for non-project routing
 const CATEGORY_KEYWORDS: Record<string, string[]> = {
@@ -11,30 +20,21 @@ const CATEGORY_KEYWORDS: Record<string, string[]> = {
 // Per-user current context tracking (in-memory, resets on daemon restart)
 const userContext = new Map<string, { projectName: string; tabName: string; updatedAt: number }>();
 
-interface CachedProject extends Project {
-  nameLower: string;
-}
-
 // Project list cache. listProjects() ran on every inbound message and re-did a
 // full SELECT + ORDER BY across the projects table; with N projects each call
-// then re-lowercased every name. The cache is invalidated explicitly via
-// invalidateProjectCache() at the few sites that mutate the table.
-let projectsCache: { user: CachedProject[]; expiresAt: number } | null = null;
+// then re-lowercased every name. Cache state lives in ./cache.js (a leaf module)
+// and is invalidated explicitly at the few sites that mutate the table.
 const PROJECTS_CACHE_TTL_MS = 30_000;
 
 function getUserProjectsCached(): CachedProject[] {
   const now = Date.now();
-  if (projectsCache && projectsCache.expiresAt > now) return projectsCache.user;
+  const cached = getProjectsCache();
+  if (cached && cached.expiresAt > now) return cached.user;
   const user = listProjects()
     .filter((p) => p.type === 'user-project')
     .map((p) => ({ ...p, nameLower: p.name.toLowerCase() }));
-  projectsCache = { user, expiresAt: now + PROJECTS_CACHE_TTL_MS };
+  setProjectsCache({ user, expiresAt: now + PROJECTS_CACHE_TTL_MS });
   return user;
-}
-
-/** Invalidate the project cache. Call after createProject/discoverProjects/etc. */
-export function invalidateProjectCache(): void {
-  projectsCache = null;
 }
 
 /** Route a message to the right project and tab */

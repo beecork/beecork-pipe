@@ -4,20 +4,10 @@ import { logger } from '../util/logger.js';
 import { validateTabNameOrDefault } from '../config.js';
 import { inboundLimiter } from '../util/rate-limiter.js';
 import { MESSAGE_LIMITS } from '../util/text.js';
+import { safeEqual } from '../util/safe-equal.js';
 import { processInboundMessage } from './pipeline.js';
 import type { WebhookConfig } from '../types.js';
 import type { Channel, ChannelContext, SendOptions } from './types.js';
-
-function safeEqualString(a: string, b: string): boolean {
-  const ab = Buffer.from(a);
-  const bb = Buffer.from(b);
-  if (ab.length !== bb.length) return false;
-  try {
-    return crypto.timingSafeEqual(ab, bb);
-  } catch {
-    return false;
-  }
-}
 
 export class WebhookChannel implements Channel {
   readonly id = 'webhook';
@@ -226,7 +216,7 @@ export class WebhookChannel implements Channel {
     // Bearer token auth (constant-time compare)
     if (config.authToken) {
       const authHeader = req.headers.authorization || '';
-      if (safeEqualString(authHeader, `Bearer ${config.authToken}`)) return true;
+      if (safeEqual(authHeader, `Bearer ${config.authToken}`)) return true;
     }
 
     // HMAC signature auth (for GitHub-style webhooks)

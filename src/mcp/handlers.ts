@@ -143,7 +143,7 @@ export const HANDLERS: Record<string, Handler> = {
     const scheduleErr = validateSchedule(scheduleType, schedule);
     if (scheduleErr) return fail(scheduleErr);
     const { TaskStore } = await import('../tasks/store.js');
-    new TaskStore().add({
+    new TaskStore(ctx.db).add({
       id,
       name: jobName,
       scheduleType: scheduleType as 'at' | 'every' | 'cron',
@@ -223,21 +223,17 @@ export const HANDLERS: Record<string, Handler> = {
         `Invalid schedule "${watchSchedule}" — must be a cron expression or interval like "5m"/"1h"/"1d".`,
       );
     const watchId = uuidv4();
-    ctx.db
-      .prepare(
-        `INSERT INTO watchers (id, name, description, check_command, condition, action, action_details, schedule)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        watchId,
-        watchName,
-        watchDesc || null,
-        checkCommand,
-        condition,
-        action || 'notify',
-        actionDetails || null,
-        watchSchedule,
-      );
+    const { WatcherStore } = await import('../watchers/store.js');
+    new WatcherStore(ctx.db).create({
+      id: watchId,
+      name: watchName,
+      description: watchDesc || null,
+      checkCommand,
+      condition,
+      action: (action || 'notify') as 'notify' | 'fix' | 'delegate',
+      actionDetails: actionDetails || null,
+      schedule: watchSchedule,
+    });
     try {
       ctx.signalWatcherReload();
     } catch (err) {
@@ -262,8 +258,9 @@ export const HANDLERS: Record<string, Handler> = {
 
   beecork_watch_delete: async (ctx, args) => {
     const { id: watchDelId } = (args || {}) as { id: string };
-    const watchDelResult = ctx.db.prepare('DELETE FROM watchers WHERE id = ?').run(watchDelId);
-    if (watchDelResult.changes === 0) return ok(`No watcher found with ID: ${watchDelId}`);
+    const { WatcherStore } = await import('../watchers/store.js');
+    const watchDeleted = new WatcherStore(ctx.db).delete(watchDelId);
+    if (!watchDeleted) return ok(`No watcher found with ID: ${watchDelId}`);
     try {
       ctx.signalWatcherReload();
     } catch {
@@ -520,10 +517,12 @@ export const HANDLERS: Record<string, Handler> = {
       message: string;
       returnToTab?: string;
     };
+    const tabErr = validateTabNameOrDefault(tabName);
+    if (tabErr) return fail(tabErr);
     try {
       const { createDelegation } = await import('../delegation/manager.js');
       const delegation = createDelegation(returnToTab || 'default', tabName, message, returnToTab);
-      PendingMessageStore.enqueueDelegation(tabName, message, ctx.db);
+      PendingMessageStore.enqueueDelegation(tabName, message, delegation.id, ctx.db);
       return ok(
         `Delegated to tab "${tabName}". Result will be sent back to "${delegation.returnToTab}" when complete.\n\nDelegation ID: ${delegation.id}`,
       );

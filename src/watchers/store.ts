@@ -1,3 +1,4 @@
+import type Database from 'better-sqlite3';
 import { getDb } from '../db/index.js';
 import type { Watcher } from './types.js';
 
@@ -36,15 +37,27 @@ function rowToWatcher(row: WatcherRow): Watcher {
 }
 
 export class WatcherStore {
+  private injectedDb?: Database.Database;
+
+  // Pass a db (e.g. the MCP server's own connection) so the MCP child doesn't
+  // trigger the daemon-side getDb() (migrations + WAL timer). See TaskStore.
+  constructor(db?: Database.Database) {
+    this.injectedDb = db;
+  }
+
+  private db(): Database.Database {
+    return this.injectedDb ?? getDb();
+  }
+
   list(): Watcher[] {
-    const db = getDb();
+    const db = this.db();
     return (db.prepare('SELECT * FROM watchers ORDER BY created_at').all() as WatcherRow[]).map(
       rowToWatcher,
     );
   }
 
   get(id: string): Watcher | undefined {
-    const db = getDb();
+    const db = this.db();
     const row = db.prepare('SELECT * FROM watchers WHERE id = ?').get(id) as WatcherRow | undefined;
     return row ? rowToWatcher(row) : undefined;
   }
@@ -55,7 +68,7 @@ export class WatcherStore {
       'lastCheckAt' | 'lastTriggeredAt' | 'triggerCount' | 'enabled' | 'createdAt'
     >,
   ): void {
-    const db = getDb();
+    const db = this.db();
     db.prepare(
       `INSERT INTO watchers (id, name, description, check_command, condition, action, action_details, schedule)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -72,7 +85,7 @@ export class WatcherStore {
   }
 
   update(id: string, fields: Partial<Watcher>): boolean {
-    const db = getDb();
+    const db = this.db();
     const existing = this.get(id);
     if (!existing) return false;
 
@@ -94,13 +107,13 @@ export class WatcherStore {
   }
 
   delete(id: string): boolean {
-    const db = getDb();
+    const db = this.db();
     const result = db.prepare('DELETE FROM watchers WHERE id = ?').run(id);
     return result.changes > 0;
   }
 
   markChecked(id: string): void {
-    const db = getDb();
+    const db = this.db();
     db.prepare('UPDATE watchers SET last_check_at = ? WHERE id = ?').run(
       new Date().toISOString(),
       id,
@@ -108,7 +121,7 @@ export class WatcherStore {
   }
 
   markTriggered(id: string): void {
-    const db = getDb();
+    const db = this.db();
     db.prepare(
       'UPDATE watchers SET last_triggered_at = ?, trigger_count = trigger_count + 1 WHERE id = ?',
     ).run(new Date().toISOString(), id);
